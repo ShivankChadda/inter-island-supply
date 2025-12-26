@@ -213,6 +213,7 @@ def render_html(table_df: pd.DataFrame, meta: dict, slip_type: str, identifier: 
 
 @app.route("/", methods=["GET", "POST"])
 def home():
+    global CURRENT_XLSX
     error = None
     html_snippet = None
     slip_type = ""
@@ -235,7 +236,6 @@ def home():
                 safe_name = re.sub(r"[^A-Za-z0-9._-]+", "_", upload.filename) or "uploaded.xlsx"
                 tmp_path = f"/tmp/{safe_name}"
                 upload.save(tmp_path)
-                global CURRENT_XLSX
                 CURRENT_XLSX = tmp_path
                 workbook_path = CURRENT_XLSX
                 uploaded_name = upload.filename
