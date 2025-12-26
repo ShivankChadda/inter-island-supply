@@ -26,6 +26,25 @@ DEFAULT_XLSX = "Master Roll.xlsx"
 # In-memory pointer to the most recent uploaded workbook; falls back to DEFAULT_XLSX
 CURRENT_XLSX = DEFAULT_XLSX
 
+
+# Normalization helpers -----------------------------------------------------
+ITEM_NAME_MAP = {
+    "green chilli": "Green Chilli",
+    "green chillie": "Green Chilli",
+    "brocoli": "Broccoli",
+}
+
+
+def normalize_item_name(name: str) -> str:
+    """Collapse whitespace, lowercase for lookup, and apply known typo fixes."""
+    if not isinstance(name, str):
+        return name
+    base = " ".join(name.strip().split())  # collapse extra spaces
+    key = base.lower()
+    if key in ITEM_NAME_MAP:
+        return ITEM_NAME_MAP[key]
+    return base
+
 COLS = ["Serial Number", "Item", "Quantity", "Unit"]
 
 
@@ -73,13 +92,14 @@ def build_table(matches: pd.DataFrame, meta: dict, slip_type: str) -> pd.DataFra
     items_df.rename(columns={meta["quantity_column"]: "Quantity"}, inplace=True)
     items_df["Quantity"] = pd.to_numeric(items_df["Quantity"], errors="coerce")
     items_df = items_df.dropna(subset=["Item_Name"])
+    # Normalize item names to fix common typos and collapse whitespace
+    items_df["Item_Name"] = items_df["Item_Name"].apply(normalize_item_name)
 
     if slip_type == "invoice":
         items_df = items_df[items_df["Quantity"] > 0]  # skip zero/NaN
 
-    if slip_type == "purchase":
-        # aggregate quantities per item/unit
-        items_df = items_df.groupby(["Item_Name", "Unit"], as_index=False)["Quantity"].sum()
+    # Aggregate quantities per item/unit to collapse duplicates (including typos)
+    items_df = items_df.groupby(["Item_Name", "Unit"], as_index=False)["Quantity"].sum()
 
     items_df = items_df.sort_values("Item_Name")
     if items_df.empty:
@@ -253,13 +273,13 @@ def home():
     <head>
       <title>Slip Generator</title>
       <style>
-        body { font-family: 'Bell MT','CMU Serif','Computer Modern',serif; background:#f7f7f7; padding:20px; }
-        .card { background:white; padding:16px 20px; border:1px solid #ddd; border-radius:6px; max-width:900px; }
-        label { display:block; margin-top:10px; font-weight:bold; }
-        input, select { padding:6px; width: 280px; }
-        .btn { margin-top:12px; padding:8px 14px; background:#000; color:white; border:none; cursor:pointer; }
+        body { font-family: 'Bell MT','CMU Serif','Computer Modern',serif; background:#f7f7f7; padding:20px; font-size:20px; text-align:center; }
+        .card { background:white; padding:16px 20px; border:1px solid #ddd; border-radius:6px; max-width:900px; margin: 0 auto; font-size:20px; }
+        label { display:block; margin-top:10px; font-weight:bold; text-align:center; }
+        input, select { padding:8px; width: 300px; font-size:20px; font-family: 'Bell MT','CMU Serif','Computer Modern',serif; text-align:center; }
+        .btn { margin-top:12px; padding:10px 16px; background:#000; color:white; border:none; cursor:pointer; font-size:20px; font-family: 'Bell MT','CMU Serif','Computer Modern',serif; }
         .error { color:#b00020; margin-top:12px; }
-        .result { margin-top:20px; }
+        .result { margin-top:20px; text-align:left; }
       </style>
     </head>
     <body>
