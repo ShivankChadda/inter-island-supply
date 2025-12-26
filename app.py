@@ -16,8 +16,10 @@ from flask import Flask, render_template_string, request, send_file
 from reportlab.lib import colors
 from reportlab.lib.pagesizes import A4
 from reportlab.lib.styles import ParagraphStyle
-from reportlab.lib.units import cm
-from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
+from reportlab.lib.units import cm, inch
+from reportlab.lib.utils import ImageReader
+from reportlab.pdfgen import canvas
+from reportlab.platypus import Image, Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
 
 app = Flask(__name__)
 
@@ -25,6 +27,10 @@ app = Flask(__name__)
 DEFAULT_XLSX = "Master Roll.xlsx"
 # In-memory pointer to the most recent uploaded workbook; falls back to DEFAULT_XLSX
 CURRENT_XLSX = DEFAULT_XLSX
+
+LOGO_PATH = "Farmers_Wordmark_Badge_Transparent_1_3000px.png"
+LABEL_WIDTH = 3 * inch
+LABEL_HEIGHT = 5 * inch
 
 
 # Normalization helpers -----------------------------------------------------
@@ -45,21 +51,34 @@ def normalize_item_name(name: str) -> str:
         return ITEM_NAME_MAP[key]
     return base
 
+
+def format_qty(x):
+    try:
+        val = float(x)
+    except (TypeError, ValueError):
+        return x
+    return f"{val:.1f}".rstrip("0").rstrip(".")
+
+
+def first_non_empty(series, default=""):
+    if series is None:
+        return default
+    ser = series.dropna()
+    return ser.iloc[0] if not ser.empty else default
+
 COLS = ["Serial Number", "Item", "Quantity", "Unit"]
 
 
 def load_matches(df: pd.DataFrame, slip_type: str, identifier: str) -> tuple[pd.DataFrame, dict]:
     """Filter rows based on slip type and identifier; return rows and meta."""
     ident_l = identifier.lower()
-    if slip_type in {"order", "invoice"}:
+    if slip_type in {"order", "invoice", "label"}:
         name_series = df["Vendor_Name"].fillna("").str.lower()
         code_series = df["Vendor_Code"].fillna("").str.lower()
         matches = df[(name_series == ident_l) | (code_series == ident_l)].copy()
         if matches.empty:
             raise ValueError(f"No rows found for vendor '{identifier}' (by name or code)")
-        vendor_code = (
-            matches["Vendor_Code"].dropna().iloc[0] if not matches["Vendor_Code"].dropna().empty else identifier
-        )
+        vendor_code = first_non_empty(matches["Vendor_Code"], identifier)
         customer_name = vendor_code  # per requirement: use code in meta
         quantity_column = "Packed_Quantity" if slip_type == "invoice" else "Quantity"
     else:  # purchase
@@ -70,8 +89,8 @@ def load_matches(df: pd.DataFrame, slip_type: str, identifier: str) -> tuple[pd.
         customer_name = identifier
         quantity_column = "Quantity"
 
-    ship_name = matches["Ship_Name"].dropna().iloc[0] if not matches["Ship_Name"].dropna().empty else ""
-    sail_val = matches["Sailing_Date"].dropna().iloc[0] if not matches["Sailing_Date"].dropna().empty else ""
+    ship_name = first_non_empty(matches["Ship_Name"], "")
+    sail_val = first_non_empty(matches["Sailing_Date"], "")
     if hasattr(sail_val, "strftime"):
         sailing_date = sail_val.strftime("%d %B")
     else:
@@ -79,6 +98,8 @@ def load_matches(df: pd.DataFrame, slip_type: str, identifier: str) -> tuple[pd.
 
     meta = {
         "customer_name": customer_name,
+        "vendor_name": first_non_empty(matches["Vendor_Name"], identifier),
+        "location": first_non_empty(matches["Vendor_Location"]) if "Vendor_Location" in matches else "",
         "ship_name": ship_name,
         "sailing_date": sailing_date,
         "quantity_column": quantity_column,
@@ -116,20 +137,39 @@ def build_table(matches: pd.DataFrame, meta: dict, slip_type: str) -> pd.DataFra
     return pd.concat([header_row, items_df, total_row], ignore_index=True)
 
 
+def build_label_items(matches: pd.DataFrame, meta: dict) -> list[dict]:
+    """Prepare aggregated item rows for labels."""
+    items_df = matches[["Item_Name", meta["quantity_column"], "Unit"]].copy()
+    items_df.rename(columns={meta["quantity_column"]: "Quantity"}, inplace=True)
+    items_df["Quantity"] = pd.to_numeric(items_df["Quantity"], errors="coerce")
+    items_df = items_df.dropna(subset=["Item_Name"])
+    items_df["Item_Name"] = items_df["Item_Name"].apply(normalize_item_name)
+
+    # aggregate to unique items (sum quantities per item/unit)
+    items_df = items_df.groupby(["Item_Name", "Unit"], as_index=False)["Quantity"].sum()
+    items_df = items_df.sort_values("Item_Name")
+    if items_df.empty:
+        raise ValueError("No items found for labels")
+
+    items = []
+    for _, row in items_df.iterrows():
+        items.append(
+            {
+                "item": row["Item_Name"],
+                "quantity": row["Quantity"],
+                "unit": row["Unit"],
+            }
+        )
+    return items
+
+
 def make_pdf(table_df: pd.DataFrame, meta: dict, slip_type: str, identifier: str) -> tuple[bytes, str]:
     """Generate PDF bytes and filename for the given table/meta."""
     header_idx = 0
     total_idx = len(table_df) - 1
 
-    def fmt_qty(x):
-        try:
-            val = float(x)
-        except (TypeError, ValueError):
-            return x
-        return f"{val:.1f}".rstrip("0").rstrip(".")
-
     data = table_df.copy()
-    data["Quantity"] = data["Quantity"].apply(fmt_qty)
+    data["Quantity"] = data["Quantity"].apply(format_qty)
     table_data = data.values.tolist()
 
     buf = io.BytesIO()
@@ -174,17 +214,80 @@ def make_pdf(table_df: pd.DataFrame, meta: dict, slip_type: str, identifier: str
     return buf.read(), filename
 
 
+def make_label_pdf(items: list[dict], meta: dict, identifier: str) -> tuple[bytes, str]:
+    """Generate label PDF (one label per item) sized 3x5 inches, portrait."""
+    buf = io.BytesIO()
+    c = canvas.Canvas(buf, pagesize=(LABEL_WIDTH, LABEL_HEIGHT))
+
+    logo_reader = None
+    try:
+        logo_reader = ImageReader(LOGO_PATH)
+    except Exception:
+        logo_reader = None
+
+    for item in items:
+        c.saveState()
+        # Draw logo
+        top_margin = 0.35 * inch
+        available_height = LABEL_HEIGHT - 2 * top_margin
+        logo_height_target = available_height * 0.18  # 15-18% of label height
+        logo_width_target = LABEL_WIDTH * 0.8
+        y_cursor = LABEL_HEIGHT - top_margin
+
+        if logo_reader:
+            iw, ih = logo_reader.getSize()
+            scale = min(logo_width_target / iw, logo_height_target / ih)
+            lw, lh = iw * scale, ih * scale
+            x_logo = (LABEL_WIDTH - lw) / 2
+            y_logo = y_cursor - lh
+            c.drawImage(logo_reader, x_logo, y_logo, width=lw, height=lh, preserveAspectRatio=True, mask='auto')
+            y_cursor = y_logo - 0.25 * inch
+        else:
+            y_cursor -= 0.25 * inch
+
+        # Text block
+        text_style_label = ("Times-Bold", 14)
+        text_style_value = ("Times-Roman", 14)
+        line_leading = 18
+        lines = [
+            ("Vendor Name", meta.get("vendor_name", "")),
+            ("Location", meta.get("location", "")),
+            ("Marker", meta.get("customer_name", "")),
+            ("Item", item.get("item", "")),
+            ("Weight", f"{format_qty(item.get('quantity'))} {item.get('unit', '')}".strip()),
+        ]
+
+        text = c.beginText()
+        text.setTextOrigin(0.5 * inch, y_cursor)
+        for label, val in lines:
+            text.setFont(*text_style_label)
+            text.textOut(f"{label}: ")
+            text.setFont(*text_style_value)
+            text.textLine(str(val))
+            text.setFont(*text_style_label)
+        c.drawText(text)
+
+        # Marker box with filled circle at bottom right
+        box_size = 0.45 * inch
+        box_x = LABEL_WIDTH - box_size - 0.35 * inch
+        box_y = 0.35 * inch
+        c.rect(box_x, box_y, box_size, box_size, stroke=1, fill=0)
+        c.circle(box_x + box_size / 2, box_y + box_size / 2, box_size / 5, stroke=0, fill=1)
+
+        c.restoreState()
+        c.showPage()
+
+    c.save()
+    buf.seek(0)
+    safe_id = re.sub(r"[^a-z0-9]+", "_", identifier.lower()).strip("_") or "id"
+    filename = f"label_{safe_id}.pdf"
+    return buf.read(), filename
+
+
 def render_html(table_df: pd.DataFrame, meta: dict, slip_type: str, identifier: str) -> str:
     """Build a simple HTML view of the slip."""
-    def fmt_qty(x):
-        try:
-            val = float(x)
-        except (TypeError, ValueError):
-            return x
-        return f"{val:.1f}".rstrip("0").rstrip(".")
-
     df = table_df.copy()
-    df["Quantity"] = df["Quantity"].apply(fmt_qty)
+    df["Quantity"] = df["Quantity"].apply(format_qty)
 
     # Build header and rows manually to keep styling consistent
     rows_html = []
@@ -231,6 +334,25 @@ def render_html(table_df: pd.DataFrame, meta: dict, slip_type: str, identifier: 
     return meta_block + table_html
 
 
+def render_label_preview(items: list[dict], meta: dict) -> str:
+    """Simple HTML preview list for labels."""
+    rows = []
+    for item in items:
+        rows.append(
+            f"<li>{item.get('item','')} — {format_qty(item.get('quantity'))} {item.get('unit','')}</li>"
+        )
+    meta_block = (
+        "<div style=\"font-family:'Bell MT','CMU Serif','Computer Modern',serif; "
+        "font-size:14px; color:black; background:white; line-height:1.5; margin-bottom:12px;\">"
+        f"<div><strong>Vendor Name</strong>: {meta.get('vendor_name','')}</div>"
+        f"<div><strong>Location</strong>: {meta.get('location','')}</div>"
+        f"<div><strong>Marker</strong>: {meta.get('customer_name','')}</div>"
+        "</div>"
+    )
+    list_block = "<ul style='padding-left:16px;'>" + "".join(rows) + "</ul>"
+    return meta_block + list_block
+
+
 @app.route("/", methods=["GET", "POST"])
 def home():
     global CURRENT_XLSX
@@ -245,8 +367,8 @@ def home():
         identifier = request.form.get("identifier", "").strip()
         upload = request.files.get("workbook")
         try:
-            if slip_type not in {"order", "purchase", "invoice"}:
-                raise ValueError("Slip type must be order, purchase, or invoice.")
+            if slip_type not in {"order", "purchase", "invoice", "label"}:
+                raise ValueError("Slip type must be order, purchase, invoice, or label.")
             if not identifier:
                 raise ValueError("Identifier is required.")
 
@@ -262,8 +384,12 @@ def home():
 
             raw_df = pd.read_excel(workbook_path)
             matches, meta = load_matches(raw_df, slip_type, identifier)
-            table_df = build_table(matches, meta, slip_type)
-            html_snippet = render_html(table_df, meta, slip_type, identifier)
+            if slip_type == "label":
+                label_items = build_label_items(matches, meta)
+                html_snippet = render_label_preview(label_items, meta)
+            else:
+                table_df = build_table(matches, meta, slip_type)
+                html_snippet = render_html(table_df, meta, slip_type, identifier)
         except Exception as exc:  # broad to show message to user
             error = str(exc)
 
@@ -285,13 +411,14 @@ def home():
     <body>
       <div class="card">
         <h2>Slip Generator</h2>
-        <form method="post">
+        <form method="post" enctype="multipart/form-data">
           <label for="slip_type">Slip type</label>
           <select name="slip_type" id="slip_type" required>
             <option value="" {% if not slip_type %}selected{% endif %}></option>
             <option value="order" {% if slip_type=='order' %}selected{% endif %}>Order slip (by Vendor)</option>
             <option value="invoice" {% if slip_type=='invoice' %}selected{% endif %}>Final invoice (Packed Quantity, by Vendor)</option>
             <option value="purchase" {% if slip_type=='purchase' %}selected{% endif %}>Purchase slip (by Source)</option>
+            <option value="label" {% if slip_type=='label' %}selected{% endif %}>Labels (by Vendor)</option>
           </select>
           <label for="identifier">Vendor name/code or Source</label>
           <input type="text" id="identifier" name="identifier" value="{{identifier}}" required placeholder="e.g., Prabhu, SKT C/BAY, or RSN" />
@@ -322,13 +449,18 @@ def home():
 def pdf():
     slip_type = request.args.get("slip_type", "").strip().lower()
     identifier = request.args.get("identifier", "").strip()
-    if slip_type not in {"order", "purchase", "invoice"} or not identifier:
+    if slip_type not in {"order", "purchase", "invoice", "label"} or not identifier:
         return "Missing or invalid parameters", 400
     try:
-        raw_df = pd.read_excel("Master Roll.xlsx")
+        workbook_path = CURRENT_XLSX
+        raw_df = pd.read_excel(workbook_path)
         matches, meta = load_matches(raw_df, slip_type, identifier)
-        table_df = build_table(matches, meta, slip_type)
-        pdf_bytes, filename = make_pdf(table_df, meta, slip_type, identifier)
+        if slip_type == "label":
+            label_items = build_label_items(matches, meta)
+            pdf_bytes, filename = make_label_pdf(label_items, meta, identifier)
+        else:
+            table_df = build_table(matches, meta, slip_type)
+            pdf_bytes, filename = make_pdf(table_df, meta, slip_type, identifier)
     except Exception as exc:
         return f"Error: {exc}", 400
     return send_file(io.BytesIO(pdf_bytes), as_attachment=True, download_name=filename, mimetype="application/pdf")
