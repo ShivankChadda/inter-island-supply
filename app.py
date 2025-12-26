@@ -279,11 +279,17 @@ def make_label_zip(items: list[dict], meta: dict, identifier: str) -> tuple[byte
             ("Weight", f"{format_qty(item.get('quantity'))} {item.get('unit', '')}".strip()),
         ]
 
+        # measure text using getbbox (compatible with newer PIL)
+        def text_width(txt, font):
+            bbox = font.getbbox(txt)
+            return bbox[2] - bbox[0] if bbox else 0
+
         line_spacing = int(font_value.size * 1.3)
         x_text = int(0.1 * width_px)
         for label, val in lines:
-            draw.text((x_text, y_cursor), f"{label}:", font=font_label, fill="black")
-            label_w, _ = draw.textsize(f"{label}:", font=font_label)
+            label_txt = f"{label}:"
+            draw.text((x_text, y_cursor), label_txt, font=font_label, fill="black")
+            label_w = text_width(label_txt, font_label)
             draw.text((x_text + label_w + 10, y_cursor), str(val), font=font_value, fill="black")
             y_cursor += line_spacing
 
