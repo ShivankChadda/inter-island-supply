@@ -461,22 +461,29 @@ def home():
     <head>
       <title>Slip Generator</title>
       <style>
-        body { font-family: 'Bell MT','CMU Serif','Computer Modern',serif; background:#f4f4f4; padding:24px; font-size:18px; }
+        :root {
+          --primary: #B5906D;
+          --bg: #F1E7D5;
+          --border: #15322A;
+        }
+        body { font-family: 'Bell MT','CMU Serif','Computer Modern',serif; background:var(--bg); padding:24px; font-size:18px; }
         .page { max-width: 1200px; margin: 0 auto; }
         .grid { display: grid; grid-template-columns: 1fr; gap: 16px; }
         @media (min-width: 900px) { .grid { grid-template-columns: 1fr 1.2fr; } }
-        .card { background:white; padding:20px 24px; border-radius:12px; box-shadow: 0 8px 24px rgba(0,0,0,0.08); }
+        .card { background:white; padding:20px 24px; border-radius:12px; box-shadow: 0 8px 24px rgba(0,0,0,0.08); border:1px solid var(--border); }
         .card h2 { margin-top:0; text-align:left; }
         label { display:block; margin-top:12px; font-weight:bold; text-align:left; }
-        input, select { padding:10px; width: 100%; font-size:18px; font-family: 'Bell MT','CMU Serif','Computer Modern',serif; text-align:left; border:1px solid #ccc; border-radius:8px; box-sizing:border-box; }
-        .btn { margin-top:16px; padding:12px 18px; background:#000; color:white; border:none; cursor:pointer; font-size:18px; font-family: 'Bell MT','CMU Serif','Computer Modern',serif; border-radius:8px; width:100%; }
+        input, select { padding:10px; width: 100%; font-size:18px; font-family: 'Bell MT','CMU Serif','Computer Modern',serif; text-align:left; border:1px solid var(--border); border-radius:8px; box-sizing:border-box; background:white; }
+        .btn { margin-top:16px; padding:12px 18px; background:var(--primary); color:white; border:1px solid var(--border); cursor:pointer; font-size:18px; font-family: 'Bell MT','CMU Serif','Computer Modern',serif; border-radius:8px; width:100%; }
         .error { color:#b00020; margin-top:12px; }
         .result { margin-top:10px; text-align:left; }
         .preview-card { min-height: 300px; }
+        .header-title { text-align:center; font-size:32px; font-weight:bold; margin: 0 0 20px 0; color: var(--border); }
       </style>
     </head>
     <body>
       <div class="page">
+        <div class="header-title">FGN Dispatch Desk</div>
         <div class="grid">
           <div class="card">
             <h2>Slip Generator</h2>
