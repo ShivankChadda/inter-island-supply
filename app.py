@@ -7,21 +7,21 @@ Run:
 
 Then open http://127.0.0.1:5000 and use the form.
 """
-import io
-import re
-from datetime import date
+import io  # in-memory buffers for PDF/ZIP creation
+import re  # simple string sanitizing for filenames
+from datetime import date  # for stamping current date
 
-import pandas as pd
-from flask import Flask, render_template_string, request, send_file
-from PIL import Image as PILImage
-from PIL import ImageDraw, ImageFont
-from reportlab.lib import colors
-from reportlab.lib.pagesizes import A4
-from reportlab.lib.styles import ParagraphStyle
-from reportlab.lib.units import cm, inch
-from reportlab.lib.utils import ImageReader
-from reportlab.pdfgen import canvas
-from reportlab.platypus import Image, Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
+import pandas as pd  # Excel parsing and data shaping
+from flask import Flask, render_template_string, request, send_file  # web server + templating
+from PIL import Image as PILImage  # label image generation
+from PIL import ImageDraw, ImageFont  # drawing text/shapes on labels
+from reportlab.lib import colors  # table styling
+from reportlab.lib.pagesizes import A4  # PDF page size for slips
+from reportlab.lib.styles import ParagraphStyle  # text styling in PDFs
+from reportlab.lib.units import cm, inch  # convenient unit conversions
+from reportlab.lib.utils import ImageReader  # (kept for table PDF path)
+from reportlab.pdfgen import canvas  # (kept for compatibility)
+from reportlab.platypus import Image, Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle  # PDF layout
 
 app = Flask(__name__)
 
@@ -30,15 +30,17 @@ DEFAULT_XLSX = "Master Roll.xlsx"
 # In-memory pointer to the most recent uploaded workbook; falls back to DEFAULT_XLSX
 CURRENT_XLSX = DEFAULT_XLSX
 
+# Branding asset and label sizing in inches / pixels
 LOGO_PATH = "Farmers_Wordmark_Badge_Transparent_1_3000px.png"
-LABEL_WIDTH_IN = 5  # inches (landscape 5x3)
-LABEL_HEIGHT_IN = 3
-LABEL_DPI = 300
-LABEL_WIDTH = LABEL_WIDTH_IN * inch
+LABEL_WIDTH_IN = 5  # label width in inches (landscape 5x3)
+LABEL_HEIGHT_IN = 3  # label height in inches
+LABEL_DPI = 300  # DPI for high-quality PNG output
+LABEL_WIDTH = LABEL_WIDTH_IN * inch  # also keep reportlab units for consistency
 LABEL_HEIGHT = LABEL_HEIGHT_IN * inch
 
 
 # Normalization helpers -----------------------------------------------------
+# Known typo map for item names; extend as needed
 ITEM_NAME_MAP = {
     "green chilli": "Green Chilli",
     "green chillie": "Green Chilli",
@@ -50,7 +52,7 @@ def normalize_item_name(name: str) -> str:
     """Collapse whitespace, lowercase for lookup, and apply known typo fixes."""
     if not isinstance(name, str):
         return name
-    base = " ".join(name.strip().split())  # collapse extra spaces
+    base = " ".join(name.strip().split())  # collapse extra spaces (multiple -> single)
     key = base.lower()
     if key in ITEM_NAME_MAP:
         return ITEM_NAME_MAP[key]
@@ -58,6 +60,7 @@ def normalize_item_name(name: str) -> str:
 
 
 def format_qty(x):
+    """Format quantity to max 1 decimal, trim trailing zeros/dots."""
     try:
         val = float(x)
     except (TypeError, ValueError):
@@ -66,6 +69,7 @@ def format_qty(x):
 
 
 def first_non_empty(series, default=""):
+    """Return the first non-null value from a Series or a default."""
     if series is None:
         return default
     ser = series.dropna()
@@ -78,6 +82,7 @@ def load_matches(df: pd.DataFrame, slip_type: str, identifier: str) -> tuple[pd.
     """Filter rows based on slip type and identifier; return rows and meta."""
     ident_l = identifier.lower()
     if slip_type in {"order", "invoice", "label"}:
+        # Vendor-based slips: match by vendor name or code (case-insensitive)
         name_series = df["Vendor_Name"].fillna("").str.lower()
         code_series = df["Vendor_Code"].fillna("").str.lower()
         matches = df[(name_series == ident_l) | (code_series == ident_l)].copy()
@@ -87,6 +92,7 @@ def load_matches(df: pd.DataFrame, slip_type: str, identifier: str) -> tuple[pd.
         customer_name = vendor_code  # per requirement: use code in meta
         quantity_column = "Packed_Quantity" if slip_type == "invoice" else "Quantity"
     else:  # purchase
+        # Purchase slips: match by Source column
         source_series = df["Source"].fillna("").str.lower()
         matches = df[source_series == ident_l].copy()
         if matches.empty:
@@ -94,6 +100,7 @@ def load_matches(df: pd.DataFrame, slip_type: str, identifier: str) -> tuple[pd.
         customer_name = identifier
         quantity_column = "Quantity"
 
+    # Try to pull ship name and sailing date, with safe fallbacks
     ship_name = first_non_empty(matches["Ship_Name"], "")
     sail_val = first_non_empty(matches["Sailing_Date"], "")
     if hasattr(sail_val, "strftime"):
@@ -101,6 +108,7 @@ def load_matches(df: pd.DataFrame, slip_type: str, identifier: str) -> tuple[pd.
     else:
         sailing_date = str(sail_val) if sail_val else ""
 
+    # Meta is reused across slips and labels
     meta = {
         "customer_name": customer_name,
         "vendor_name": first_non_empty(matches["Vendor_Name"], identifier),
@@ -114,6 +122,7 @@ def load_matches(df: pd.DataFrame, slip_type: str, identifier: str) -> tuple[pd.
 
 def build_table(matches: pd.DataFrame, meta: dict, slip_type: str) -> pd.DataFrame:
     """Construct the output table with sorting, serials, totals, and proper quantity column."""
+    # Start from the minimal columns we need and rename quantity consistently
     items_df = matches[["Item_Name", meta["quantity_column"], "Unit"]].copy()
     items_df.rename(columns={meta["quantity_column"]: "Quantity"}, inplace=True)
     items_df["Quantity"] = pd.to_numeric(items_df["Quantity"], errors="coerce")
@@ -144,6 +153,7 @@ def build_table(matches: pd.DataFrame, meta: dict, slip_type: str) -> pd.DataFra
 
 def build_label_items(matches: pd.DataFrame, meta: dict) -> list[dict]:
     """Prepare aggregated item rows for labels."""
+    # Similar to build_table but returns a simple list of dicts for PNG labels
     items_df = matches[["Item_Name", meta["quantity_column"], "Unit"]].copy()
     items_df.rename(columns={meta["quantity_column"]: "Quantity"}, inplace=True)
     items_df["Quantity"] = pd.to_numeric(items_df["Quantity"], errors="coerce")
@@ -177,10 +187,12 @@ def make_pdf(table_df: pd.DataFrame, meta: dict, slip_type: str, identifier: str
     data["Quantity"] = data["Quantity"].apply(format_qty)
     table_data = data.values.tolist()
 
+    # Set up a basic reportlab document
     buf = io.BytesIO()
     doc = SimpleDocTemplate(buf, pagesize=A4, rightMargin=36, leftMargin=36, topMargin=36, bottomMargin=36)
     story = []
 
+    # Meta block at top of PDF
     meta_style = ParagraphStyle(name="Meta", fontName="Times-Roman", fontSize=12, leading=15, spaceAfter=4)
     for label, value in [
         ("Date", date.today().strftime("%d %B %Y")),
@@ -191,6 +203,7 @@ def make_pdf(table_df: pd.DataFrame, meta: dict, slip_type: str, identifier: str
         story.append(Paragraph(f"<b>{label}</b>: {value}", meta_style))
     story.append(Spacer(1, 12))
 
+    # Table body with styling
     table = Table(table_data, colWidths=[2.5 * cm, 6 * cm, 3 * cm, 2.5 * cm])
     style = TableStyle(
         [
@@ -210,9 +223,11 @@ def make_pdf(table_df: pd.DataFrame, meta: dict, slip_type: str, identifier: str
     table.setStyle(style)
     story.append(table)
 
+    # Render the PDF
     doc.build(story)
     buf.seek(0)
 
+    # Safe filename
     safe_id = re.sub(r"[^a-z0-9]+", "_", identifier.lower()).strip("_") or "id"
     safe_sail = re.sub(r"[^a-z0-9]+", "_", meta["sailing_date"].lower()).strip("_") or "sailing_date"
     filename = f"{slip_type}_{safe_id}_{safe_sail}_slip.pdf"
@@ -221,6 +236,7 @@ def make_pdf(table_df: pd.DataFrame, meta: dict, slip_type: str, identifier: str
 
 def make_label_zip(items: list[dict], meta: dict, identifier: str) -> tuple[bytes, str]:
     """Generate label images (PNG) and return a ZIP as bytes."""
+    # Compute pixel dimensions from inches and DPI
     width_px = int(LABEL_WIDTH_IN * LABEL_DPI)
     height_px = int(LABEL_HEIGHT_IN * LABEL_DPI)
 
@@ -250,6 +266,7 @@ def make_label_zip(items: list[dict], meta: dict, identifier: str) -> tuple[byte
 
     images = []
     for item in items:
+        # Blank white canvas per label
         img = PILImage.new("RGB", (width_px, height_px), "white")
         draw = ImageDraw.Draw(img)
 
@@ -284,6 +301,7 @@ def make_label_zip(items: list[dict], meta: dict, identifier: str) -> tuple[byte
             bbox = font.getbbox(txt)
             return bbox[2] - bbox[0] if bbox else 0
 
+        # Draw each Label: Value line with spacing
         line_spacing = int(font_value.size * 1.3)
         x_text = int(0.1 * width_px)
         for label, val in lines:
@@ -304,13 +322,14 @@ def make_label_zip(items: list[dict], meta: dict, identifier: str) -> tuple[byte
             outline=None,
         )
 
+        # Save this label to in-memory PNG
         bio = io.BytesIO()
         img.save(bio, format="PNG")
         bio.seek(0)
         safe_item = re.sub(r"[^a-z0-9]+", "_", str(item.get("item", "")).lower()).strip("_") or "item"
         images.append((f"{safe_item}.png", bio.read()))
 
-    # build zip
+    # build zip of all labels
     zip_buf = io.BytesIO()
     import zipfile
 
@@ -402,6 +421,7 @@ def home():
     uploaded_name = None
 
     if request.method == "POST":
+        # Read form inputs
         slip_type = request.form.get("slip_type", "").strip().lower()
         identifier = request.form.get("identifier", "").strip()
         upload = request.files.get("workbook")
@@ -411,6 +431,7 @@ def home():
             if not identifier:
                 raise ValueError("Identifier is required.")
 
+            # Decide which workbook to read: uploaded or default/current
             workbook_path = CURRENT_XLSX
             if upload and upload.filename:
                 # Save uploaded workbook to a temp path and switch CURRENT_XLSX
@@ -424,9 +445,11 @@ def home():
             raw_df = pd.read_excel(workbook_path)
             matches, meta = load_matches(raw_df, slip_type, identifier)
             if slip_type == "label":
+                # Labels: show a simple preview list
                 label_items = build_label_items(matches, meta)
                 html_snippet = render_label_preview(label_items, meta)
             else:
+                # Slips: render HTML table preview
                 table_df = build_table(matches, meta, slip_type)
                 html_snippet = render_html(table_df, meta, slip_type, identifier)
         except Exception as exc:  # broad to show message to user
@@ -438,47 +461,61 @@ def home():
     <head>
       <title>Slip Generator</title>
       <style>
-        body { font-family: 'Bell MT','CMU Serif','Computer Modern',serif; background:#f7f7f7; padding:20px; font-size:20px; text-align:center; }
-        .card { background:white; padding:16px 20px; border:1px solid #ddd; border-radius:6px; max-width:900px; margin: 0 auto; font-size:20px; }
-        label { display:block; margin-top:10px; font-weight:bold; text-align:center; }
-        input, select { padding:8px; width: 300px; font-size:20px; font-family: 'Bell MT','CMU Serif','Computer Modern',serif; text-align:center; }
-        .btn { margin-top:12px; padding:10px 16px; background:#000; color:white; border:none; cursor:pointer; font-size:20px; font-family: 'Bell MT','CMU Serif','Computer Modern',serif; }
+        body { font-family: 'Bell MT','CMU Serif','Computer Modern',serif; background:#f4f4f4; padding:24px; font-size:18px; }
+        .page { max-width: 1200px; margin: 0 auto; }
+        .grid { display: grid; grid-template-columns: 1fr; gap: 16px; }
+        @media (min-width: 900px) { .grid { grid-template-columns: 1fr 1.2fr; } }
+        .card { background:white; padding:20px 24px; border-radius:12px; box-shadow: 0 8px 24px rgba(0,0,0,0.08); }
+        .card h2 { margin-top:0; text-align:left; }
+        label { display:block; margin-top:12px; font-weight:bold; text-align:left; }
+        input, select { padding:10px; width: 100%; font-size:18px; font-family: 'Bell MT','CMU Serif','Computer Modern',serif; text-align:left; border:1px solid #ccc; border-radius:8px; box-sizing:border-box; }
+        .btn { margin-top:16px; padding:12px 18px; background:#000; color:white; border:none; cursor:pointer; font-size:18px; font-family: 'Bell MT','CMU Serif','Computer Modern',serif; border-radius:8px; width:100%; }
         .error { color:#b00020; margin-top:12px; }
-        .result { margin-top:20px; text-align:left; }
+        .result { margin-top:10px; text-align:left; }
+        .preview-card { min-height: 300px; }
       </style>
     </head>
     <body>
-      <div class="card">
-        <h2>Slip Generator</h2>
-        <form method="post" enctype="multipart/form-data">
-          <label for="slip_type">Slip type</label>
-          <select name="slip_type" id="slip_type" required>
-            <option value="" {% if not slip_type %}selected{% endif %}></option>
-            <option value="order" {% if slip_type=='order' %}selected{% endif %}>Order slip (by Vendor)</option>
-            <option value="invoice" {% if slip_type=='invoice' %}selected{% endif %}>Final invoice (Packed Quantity, by Vendor)</option>
-            <option value="purchase" {% if slip_type=='purchase' %}selected{% endif %}>Purchase slip (by Source)</option>
-            <option value="label" {% if slip_type=='label' %}selected{% endif %}>Labels (by Vendor)</option>
-          </select>
-          <label for="identifier">Vendor name/code or Source</label>
-          <input type="text" id="identifier" name="identifier" value="{{identifier}}" required placeholder="e.g., Prabhu, SKT C/BAY, or RSN" />
-          <label for="workbook">Upload Excel (optional, .xlsx)</label>
-          <input type="file" id="workbook" name="workbook" accept=".xlsx" />
-          <div><button class="btn" type="submit">Generate</button></div>
-          {% if uploaded_name %}<div style="margin-top:6px; color:#444;">Using uploaded file: {{uploaded_name}}</div>{% endif %}
-        </form>
-        {% if error %}<div class="error">{{error}}</div>{% endif %}
-        {% if html_snippet %}
-          <div class="result">
-            {{ html_snippet | safe }}
-            <form action="/pdf" method="get" style="margin-top:12px;">
-              <input type="hidden" name="slip_type" value="{{slip_type}}">
-              <input type="hidden" name="identifier" value="{{identifier}}">
-              <button class="btn" type="submit">
-                {% if slip_type=='label' %}Download Labels (ZIP){% else %}Download PDF{% endif %}
-              </button>
+      <div class="page">
+        <div class="grid">
+          <div class="card">
+            <h2>Slip Generator</h2>
+            <form method="post" enctype="multipart/form-data">
+              <label for="slip_type">Slip type</label>
+              <select name="slip_type" id="slip_type" required>
+                <option value="" {% if not slip_type %}selected{% endif %}></option>
+                <option value="order" {% if slip_type=='order' %}selected{% endif %}>Order slip (by Vendor)</option>
+                <option value="invoice" {% if slip_type=='invoice' %}selected{% endif %}>Final invoice (Packed Quantity, by Vendor)</option>
+                <option value="purchase" {% if slip_type=='purchase' %}selected{% endif %}>Purchase slip (by Source)</option>
+                <option value="label" {% if slip_type=='label' %}selected{% endif %}>Labels (by Vendor)</option>
+              </select>
+              <label for="identifier">Vendor name/code or Source</label>
+              <input type="text" id="identifier" name="identifier" value="{{identifier}}" required placeholder="e.g., Prabhu, SKT C/BAY, or RSN" />
+              <label for="workbook">Upload Excel (optional, .xlsx)</label>
+              <input type="file" id="workbook" name="workbook" accept=".xlsx" />
+              <button class="btn" type="submit">Generate</button>
+              {% if uploaded_name %}<div style="margin-top:6px; color:#444; text-align:left;">Using uploaded file: {{uploaded_name}}</div>{% endif %}
             </form>
+            {% if error %}<div class="error">{{error}}</div>{% endif %}
           </div>
-        {% endif %}
+          <div class="card preview-card">
+            <h2>Preview & Download</h2>
+            {% if html_snippet %}
+              <div class="result">
+                {{ html_snippet | safe }}
+                <form action="/pdf" method="get" style="margin-top:12px;">
+                  <input type="hidden" name="slip_type" value="{{slip_type}}">
+                  <input type="hidden" name="identifier" value="{{identifier}}">
+                  <button class="btn" type="submit">
+                    {% if slip_type=='label' %}Download Labels (ZIP){% else %}Download PDF{% endif %}
+                  </button>
+                </form>
+              </div>
+            {% else %}
+              <p style="color:#666;">Generate a slip to see the preview here.</p>
+            {% endif %}
+          </div>
+        </div>
       </div>
     </body>
     </html>
@@ -493,13 +530,16 @@ def pdf():
     if slip_type not in {"order", "purchase", "invoice", "label"} or not identifier:
         return "Missing or invalid parameters", 400
     try:
+        # Use current workbook (uploaded or default)
         workbook_path = CURRENT_XLSX
         raw_df = pd.read_excel(workbook_path)
         matches, meta = load_matches(raw_df, slip_type, identifier)
         if slip_type == "label":
+            # Labels -> ZIP of PNGs
             label_items = build_label_items(matches, meta)
             pdf_bytes, filename = make_label_zip(label_items, meta, identifier)
         else:
+            # All other slips -> PDF
             table_df = build_table(matches, meta, slip_type)
             pdf_bytes, filename = make_pdf(table_df, meta, slip_type, identifier)
     except Exception as exc:
