@@ -21,6 +21,11 @@ from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer, Table, Tabl
 
 app = Flask(__name__)
 
+# Path to default workbook bundled with the app
+DEFAULT_XLSX = "Master Roll.xlsx"
+# In-memory pointer to the most recent uploaded workbook; falls back to DEFAULT_XLSX
+CURRENT_XLSX = DEFAULT_XLSX
+
 COLS = ["Serial Number", "Item", "Quantity", "Unit"]
 
 
@@ -212,17 +217,30 @@ def home():
     html_snippet = None
     slip_type = ""
     identifier = ""
+    uploaded_name = None
 
     if request.method == "POST":
         slip_type = request.form.get("slip_type", "").strip().lower()
         identifier = request.form.get("identifier", "").strip()
+        upload = request.files.get("workbook")
         try:
             if slip_type not in {"order", "purchase", "invoice"}:
                 raise ValueError("Slip type must be order, purchase, or invoice.")
             if not identifier:
                 raise ValueError("Identifier is required.")
 
-            raw_df = pd.read_excel("Master Roll.xlsx")
+            workbook_path = CURRENT_XLSX
+            if upload and upload.filename:
+                # Save uploaded workbook to a temp path and switch CURRENT_XLSX
+                safe_name = re.sub(r"[^A-Za-z0-9._-]+", "_", upload.filename) or "uploaded.xlsx"
+                tmp_path = f"/tmp/{safe_name}"
+                upload.save(tmp_path)
+                global CURRENT_XLSX
+                CURRENT_XLSX = tmp_path
+                workbook_path = CURRENT_XLSX
+                uploaded_name = upload.filename
+
+            raw_df = pd.read_excel(workbook_path)
             matches, meta = load_matches(raw_df, slip_type, identifier)
             table_df = build_table(matches, meta, slip_type)
             html_snippet = render_html(table_df, meta, slip_type, identifier)
@@ -257,7 +275,10 @@ def home():
           </select>
           <label for="identifier">Vendor name/code or Source</label>
           <input type="text" id="identifier" name="identifier" value="{{identifier}}" required placeholder="e.g., Prabhu, SKT C/BAY, or RSN" />
+          <label for="workbook">Upload Excel (optional, .xlsx)</label>
+          <input type="file" id="workbook" name="workbook" accept=".xlsx" />
           <div><button class="btn" type="submit">Generate</button></div>
+          {% if uploaded_name %}<div style="margin-top:6px; color:#444;">Using uploaded file: {{uploaded_name}}</div>{% endif %}
         </form>
         {% if error %}<div class="error">{{error}}</div>{% endif %}
         {% if html_snippet %}
