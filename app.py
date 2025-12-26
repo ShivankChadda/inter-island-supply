@@ -7,6 +7,7 @@ Run:
 
 Then open http://127.0.0.1:5000 and use the form.
 """
+import base64  # for embedding clipart inline
 import io  # in-memory buffers for PDF/ZIP creation
 import re  # simple string sanitizing for filenames
 from datetime import date  # for stamping current date
@@ -32,6 +33,7 @@ CURRENT_XLSX = DEFAULT_XLSX
 
 # Branding asset and label sizing in inches / pixels
 LOGO_PATH = "Farmers_Wordmark_Badge_Transparent_1_3000px.png"
+CLIPART_PATH = "Excel clipart.png"
 LABEL_WIDTH_IN = 5  # label width in inches (landscape 5x3)
 LABEL_HEIGHT_IN = 3  # label height in inches
 LABEL_DPI = 300  # DPI for high-quality PNG output
@@ -74,6 +76,19 @@ def first_non_empty(series, default=""):
         return default
     ser = series.dropna()
     return ser.iloc[0] if not ser.empty else default
+
+
+def load_clipart_data_uri() -> str:
+    """Embed clipart as a data URI so it can be used in the template without a static folder."""
+    try:
+        with open(CLIPART_PATH, "rb") as f:
+            encoded = base64.b64encode(f.read()).decode("ascii")
+            return f"data:image/png;base64,{encoded}"
+    except Exception:
+        return ""
+
+
+CLIPART_DATA_URI = load_clipart_data_uri()
 
 COLS = ["Serial Number", "Item", "Quantity", "Unit"]
 
@@ -273,20 +288,20 @@ def make_label_zip(items: list[dict], meta: dict, identifier: str) -> tuple[byte
         # thin border
         draw.rectangle([1, 1, width_px - 2, height_px - 2], outline="black", width=2)
 
-        y_cursor = int(0.2 * height_px)
+        y_cursor = int(0.15 * height_px)
 
-        # logo placement
+        # logo placement (target ~33% of height)
         if logo_img:
-            target_h = int(height_px * 0.18)
+            target_h = int(height_px * 0.33)
             target_w = int(width_px * 0.8)
             lw, lh = logo_img.size
             scale = min(target_w / lw, target_h / lh)
             new_size = (int(lw * scale), int(lh * scale))
             logo_resized = logo_img.resize(new_size, PILImage.LANCZOS)
             x_logo = (width_px - new_size[0]) // 2
-            y_logo = int(0.08 * height_px)
+            y_logo = int(0.05 * height_px)
             img.paste(logo_resized, (x_logo, y_logo), logo_resized)
-            y_cursor = y_logo + new_size[1] + int(0.06 * height_px)
+            y_cursor = y_logo + new_size[1] + int(0.05 * height_px)
 
         lines = [
             ("Vendor Name", meta.get("vendor_name", "")),
@@ -302,7 +317,7 @@ def make_label_zip(items: list[dict], meta: dict, identifier: str) -> tuple[byte
             return bbox[2] - bbox[0] if bbox else 0
 
         # Draw each Label: Value line with spacing
-        line_spacing = int(font_value.size * 1.3)
+        line_spacing = int(font_value.size * 1.15)
         x_text = int(0.1 * width_px)
         for label, val in lines:
             label_txt = f"{label}:"
@@ -311,16 +326,43 @@ def make_label_zip(items: list[dict], meta: dict, identifier: str) -> tuple[byte
             draw.text((x_text + label_w + 10, y_cursor), str(val), font=font_value, fill="black")
             y_cursor += line_spacing
 
-        # marker box bottom right
+        # marker box bottom right with shape based on marker text
         box_size = int(0.12 * height_px)
         box_x = width_px - box_size - int(0.08 * width_px)
         box_y = height_px - box_size - int(0.1 * height_px)
         draw.rectangle([box_x, box_y, box_x + box_size, box_y + box_size], outline="black", width=2)
-        draw.ellipse(
-            [box_x + box_size * 0.3, box_y + box_size * 0.3, box_x + box_size * 0.7, box_y + box_size * 0.7],
-            fill="black",
-            outline=None,
-        )
+        marker_text = str(meta.get("customer_name", "") or "").lower()
+        if "rsn" in marker_text:
+            # filled circle
+            draw.ellipse(
+                [box_x + box_size * 0.3, box_y + box_size * 0.3, box_x + box_size * 0.7, box_y + box_size * 0.7],
+                fill="black",
+                outline=None,
+            )
+        elif "prashanto" in marker_text:
+            # filled triangle
+            pts = [
+                (box_x + box_size / 2, box_y + box_size * 0.25),
+                (box_x + box_size * 0.75, box_y + box_size * 0.75),
+                (box_x + box_size * 0.25, box_y + box_size * 0.75),
+            ]
+            draw.polygon(pts, fill="black")
+        elif "fgn" in marker_text:
+            # filled diamond
+            pts = [
+                (box_x + box_size / 2, box_y + box_size * 0.2),
+                (box_x + box_size * 0.8, box_y + box_size / 2),
+                (box_x + box_size / 2, box_y + box_size * 0.8),
+                (box_x + box_size * 0.2, box_y + box_size / 2),
+            ]
+            draw.polygon(pts, fill="black")
+        else:
+            # default circle
+            draw.ellipse(
+                [box_x + box_size * 0.3, box_y + box_size * 0.3, box_x + box_size * 0.7, box_y + box_size * 0.7],
+                fill="black",
+                outline=None,
+            )
 
         # Save this label to in-memory PNG
         bio = io.BytesIO()
@@ -441,6 +483,9 @@ def home():
                 CURRENT_XLSX = tmp_path
                 workbook_path = CURRENT_XLSX
                 uploaded_name = upload.filename
+            elif CURRENT_XLSX == DEFAULT_XLSX:
+                # If nothing has been uploaded yet, require an upload
+                raise ValueError("Please upload the Master Roll (.xlsx) to continue.")
 
             raw_df = pd.read_excel(workbook_path)
             matches, meta = load_matches(raw_df, slip_type, identifier)
@@ -479,6 +524,12 @@ def home():
         .result { margin-top:10px; text-align:left; }
         .preview-card { min-height: 300px; }
         .header-title { text-align:center; font-size:32px; font-weight:bold; margin: 0 0 20px 0; color: var(--border); }
+        .dropzone { border:2px dashed var(--border); border-radius:12px; background:#fff; padding:20px; text-align:center; cursor:pointer; transition: background 0.2s, border-color 0.2s; }
+        .dropzone.hover { background: #f8f1e4; border-color: var(--primary); }
+        .dropzone img { width: 80px; height: auto; display:block; margin:0 auto 10px; }
+        .dropzone .dz-title { font-weight:bold; margin-bottom:4px; }
+        .dropzone .dz-sub { color:#555; font-size:16px; }
+        .dropzone input { display:none; }
       </style>
     </head>
     <body>
@@ -498,8 +549,13 @@ def home():
               </select>
               <label for="identifier">Vendor name/code or Source</label>
               <input type="text" id="identifier" name="identifier" value="{{identifier}}" required placeholder="e.g., Prabhu, SKT C/BAY, or RSN" />
-              <label for="workbook">Upload Excel (optional, .xlsx)</label>
-              <input type="file" id="workbook" name="workbook" accept=".xlsx" />
+              <label for="workbook">Upload your Master Roll (drag & drop or click)</label>
+              <div id="drop-zone" class="dropzone">
+                <img src="{{ clipart_data }}" alt="Excel file" />
+                <div class="dz-title">Drag & Drop</div>
+                <div class="dz-sub">or click to browse (.xlsx)</div>
+                <input type="file" id="workbook" name="workbook" accept=".xlsx" required />
+              </div>
               <button class="btn" type="submit">Generate</button>
               {% if uploaded_name %}<div style="margin-top:6px; color:#444; text-align:left;">Using uploaded file: {{uploaded_name}}</div>{% endif %}
             </form>
@@ -524,10 +580,34 @@ def home():
           </div>
         </div>
       </div>
+      <script>
+        const dropZone = document.getElementById('drop-zone');
+        const fileInput = document.getElementById('workbook');
+        dropZone.addEventListener('click', () => fileInput.click());
+        dropZone.addEventListener('dragover', (e) => {
+          e.preventDefault();
+          dropZone.classList.add('hover');
+        });
+        dropZone.addEventListener('dragleave', () => dropZone.classList.remove('hover'));
+        dropZone.addEventListener('drop', (e) => {
+          e.preventDefault();
+          dropZone.classList.remove('hover');
+          if (e.dataTransfer.files && e.dataTransfer.files.length) {
+            fileInput.files = e.dataTransfer.files;
+          }
+        });
+      </script>
     </body>
     </html>
     """
-    return render_template_string(template, error=error, html_snippet=html_snippet, slip_type=slip_type, identifier=identifier)
+    return render_template_string(
+        template,
+        error=error,
+        html_snippet=html_snippet,
+        slip_type=slip_type,
+        identifier=identifier,
+        clipart_data=CLIPART_DATA_URI,
+    )
 
 
 @app.route("/pdf")
