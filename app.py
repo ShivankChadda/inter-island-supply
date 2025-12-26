@@ -11,6 +11,7 @@ import base64  # for embedding clipart inline
 import io  # in-memory buffers for PDF/ZIP creation
 import re  # simple string sanitizing for filenames
 from datetime import date  # for stamping current date
+import os  # file mtime for status bar
 
 import pandas as pd  # Excel parsing and data shaping
 from flask import Flask, render_template_string, request, send_file  # web server + templating
@@ -89,6 +90,19 @@ def load_clipart_data_uri() -> str:
 
 
 CLIPART_DATA_URI = load_clipart_data_uri()
+
+
+def load_logo_data_uri() -> str:
+    """Embed main logo as data URI for the top bar."""
+    try:
+        with open(LOGO_PATH, "rb") as f:
+            encoded = base64.b64encode(f.read()).decode("ascii")
+            return f"data:image/png;base64,{encoded}"
+    except Exception:
+        return ""
+
+
+LOGO_DATA_URI = load_logo_data_uri()
 
 COLS = ["Serial Number", "Item", "Quantity", "Unit"]
 
@@ -500,6 +514,14 @@ def home():
         except Exception as exc:  # broad to show message to user
             error = str(exc)
 
+    # status info for header
+    file_display = uploaded_name or os.path.basename(CURRENT_XLSX)
+    try:
+        last_updated = date.fromtimestamp(os.path.getmtime(CURRENT_XLSX)).strftime("%d %b %Y")
+    except Exception:
+        last_updated = "unknown"
+    today_str = date.today().strftime("%d %b %Y")
+
     template = """
     <!doctype html>
     <html>
@@ -511,32 +533,53 @@ def home():
           --bg: #F1E7D5;
           --border: #15322A;
         }
-        body { font-family: 'Bell MT','CMU Serif','Computer Modern',serif; background:var(--bg); padding:24px; font-size:18px; }
-        .page { max-width: 1200px; margin: 0 auto; }
-        .grid { display: grid; grid-template-columns: 1fr; gap: 16px; }
+        body { font-family: 'Bell MT','CMU Serif','Computer Modern',serif; background:var(--bg); padding:16px 16px 12px 16px; font-size:18px; }
+        .page { max-width: 1050px; margin: 0 auto; }
+        .topbar { display:flex; align-items:center; justify-content:space-between; padding:10px 14px; border:1px solid var(--border); border-radius:10px; background:white; box-shadow:0 6px 16px rgba(0,0,0,0.08); margin-bottom:14px; }
+        .top-left { display:flex; align-items:center; gap:10px; }
+        .top-left img { height:32px; width:auto; }
+        .top-title { font-size:22px; font-weight:bold; color: var(--border); }
+        .top-right { text-align:right; font-family: 'Courier New', monospace; font-size:14px; line-height:1.4; color:#333; }
+        .grid { display: grid; grid-template-columns: 1fr; gap: 14px; }
         @media (min-width: 900px) { .grid { grid-template-columns: 1fr 1.2fr; } }
-        .card { background:white; padding:20px 24px; border-radius:12px; box-shadow: 0 8px 24px rgba(0,0,0,0.08); border:1px solid var(--border); }
+        .card { background:white; padding:20px 24px; border-radius:12px; box-shadow: 0 8px 24px rgba(0,0,0,0.08); border:1px solid #d6c9b5; }
+        .card-primary { border:2px solid var(--border); box-shadow: 0 10px 26px rgba(0,0,0,0.1); }
+        .card-secondary.active { border:2px solid var(--primary); box-shadow: 0 10px 26px rgba(181,144,109,0.25); }
         .card h2 { margin-top:0; text-align:left; }
         label { display:block; margin-top:12px; font-weight:bold; text-align:left; }
         input, select { padding:10px; width: 100%; font-size:18px; font-family: 'Bell MT','CMU Serif','Computer Modern',serif; text-align:left; border:1px solid var(--border); border-radius:8px; box-sizing:border-box; background:white; }
-        .btn { margin-top:16px; padding:12px 18px; background:var(--primary); color:white; border:1px solid var(--border); cursor:pointer; font-size:18px; font-family: 'Bell MT','CMU Serif','Computer Modern',serif; border-radius:8px; width:100%; }
+        .btn { margin-top:16px; padding:14px 18px; background:#9a7754; color:white; border:1px solid var(--border); cursor:pointer; font-size:18px; font-family: 'Bell MT','CMU Serif','Computer Modern',serif; border-radius:8px; width:100%; transition: all 0.15s ease; }
+        .btn:hover { background:#826340; box-shadow: 0 6px 12px rgba(0,0,0,0.12); }
+        .microcopy { font-size:13px; color:#444; margin-top:6px; text-align:left; }
         .error { color:#b00020; margin-top:12px; }
+        .alert { background:#fdecea; color:#611a15; border:1px solid #f5c6cb; padding:10px 12px; border-radius:8px; margin-top:12px; }
         .result { margin-top:10px; text-align:left; }
         .preview-card { min-height: 300px; }
-        .header-title { text-align:center; font-size:32px; font-weight:bold; margin: 0 0 20px 0; color: var(--border); }
+        .header-title { display:none; }
         .dropzone { border:2px dashed var(--border); border-radius:12px; background:#fff; padding:20px; text-align:center; cursor:pointer; transition: background 0.2s, border-color 0.2s; }
         .dropzone.hover { background: #f8f1e4; border-color: var(--primary); }
-        .dropzone img { width: 80px; height: auto; display:block; margin:0 auto 10px; }
+        .dropzone img { width: 56px; height: auto; display:block; margin:0 auto 10px; }
         .dropzone .dz-title { font-weight:bold; margin-bottom:4px; }
         .dropzone .dz-sub { color:#555; font-size:16px; }
         .dropzone input { display:none; }
+        footer { margin-top:18px; text-align:center; font-size:14px; color:#444; }
       </style>
     </head>
     <body>
       <div class="page">
-        <div class="header-title">FGN Dispatch Desk</div>
+        <div class="topbar">
+          <div class="top-left">
+            <img src="{{ logo_data }}" alt="FGN">
+            <span class="top-title">FGN Dispatch Desk</span>
+          </div>
+          <div class="top-right">
+            <div>Today: {{ today_str }}</div>
+            <div>File: {{ file_display }}</div>
+            <div>Last updated: {{ last_updated }}</div>
+          </div>
+        </div>
         <div class="grid">
-          <div class="card">
+          <div class="card card-primary">
             <h2>Slip Generator</h2>
             <form method="post" enctype="multipart/form-data">
               <label for="slip_type">Slip type</label>
@@ -557,11 +600,12 @@ def home():
                 <input type="file" id="workbook" name="workbook" accept=".xlsx" required />
               </div>
               <button class="btn" type="submit">Generate</button>
+              <div class="microcopy">Generates preview before download.</div>
               {% if uploaded_name %}<div style="margin-top:6px; color:#444; text-align:left;">Using uploaded file: {{uploaded_name}}</div>{% endif %}
             </form>
-            {% if error %}<div class="error">{{error}}</div>{% endif %}
+            {% if error %}<div class="alert">Error: {{error}}<br/>Check spelling or confirm column values in Master Roll.</div>{% endif %}
           </div>
-          <div class="card preview-card">
+          <div class="card preview-card {% if html_snippet %}card-secondary active{% else %}card-secondary{% endif %}">
             <h2>Preview & Download</h2>
             {% if html_snippet %}
               <div class="result">
@@ -579,6 +623,7 @@ def home():
             {% endif %}
           </div>
         </div>
+        <footer>designed by Shivank Chadda • Internal tool • FGN Operations • v1.0</footer>
       </div>
       <script>
         const dropZone = document.getElementById('drop-zone');
