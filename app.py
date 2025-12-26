@@ -13,6 +13,8 @@ from datetime import date
 
 import pandas as pd
 from flask import Flask, render_template_string, request, send_file
+from PIL import Image as PILImage
+from PIL import ImageDraw, ImageFont
 from reportlab.lib import colors
 from reportlab.lib.pagesizes import A4
 from reportlab.lib.styles import ParagraphStyle
@@ -29,8 +31,11 @@ DEFAULT_XLSX = "Master Roll.xlsx"
 CURRENT_XLSX = DEFAULT_XLSX
 
 LOGO_PATH = "Farmers_Wordmark_Badge_Transparent_1_3000px.png"
-LABEL_WIDTH = 3 * inch
-LABEL_HEIGHT = 5 * inch
+LABEL_WIDTH_IN = 5  # inches (landscape 5x3)
+LABEL_HEIGHT_IN = 3
+LABEL_DPI = 300
+LABEL_WIDTH = LABEL_WIDTH_IN * inch
+LABEL_HEIGHT = LABEL_HEIGHT_IN * inch
 
 
 # Normalization helpers -----------------------------------------------------
@@ -214,41 +219,58 @@ def make_pdf(table_df: pd.DataFrame, meta: dict, slip_type: str, identifier: str
     return buf.read(), filename
 
 
-def make_label_pdf(items: list[dict], meta: dict, identifier: str) -> tuple[bytes, str]:
-    """Generate label PDF (one label per item) sized 3x5 inches, portrait."""
-    buf = io.BytesIO()
-    c = canvas.Canvas(buf, pagesize=(LABEL_WIDTH, LABEL_HEIGHT))
+def make_label_zip(items: list[dict], meta: dict, identifier: str) -> tuple[bytes, str]:
+    """Generate label images (PNG) and return a ZIP as bytes."""
+    width_px = int(LABEL_WIDTH_IN * LABEL_DPI)
+    height_px = int(LABEL_HEIGHT_IN * LABEL_DPI)
 
-    logo_reader = None
+    # load fonts (fallback to default if missing)
+    def load_font(size, bold=False):
+        candidates = [
+            ("Times New Roman Bold.ttf", "Times New Roman.ttf") if bold else ("Times New Roman.ttf",),
+            ("DejaVuSerif-Bold.ttf", "DejaVuSerif.ttf") if bold else ("DejaVuSerif.ttf",),
+        ]
+        for family in candidates:
+            for path in family:
+                try:
+                    return ImageFont.truetype(path, size)
+                except Exception:
+                    continue
+        return ImageFont.load_default()
+
+    font_label = load_font(48, bold=True)
+    font_value = load_font(48, bold=False)
+
+    # pre-load logo
+    logo_img = None
     try:
-        logo_reader = ImageReader(LOGO_PATH)
+        logo_img = PILImage.open(LOGO_PATH).convert("RGBA")
     except Exception:
-        logo_reader = None
+        logo_img = None
 
+    images = []
     for item in items:
-        c.saveState()
-        # Draw logo
-        top_margin = 0.35 * inch
-        available_height = LABEL_HEIGHT - 2 * top_margin
-        logo_height_target = available_height * 0.18  # 15-18% of label height
-        logo_width_target = LABEL_WIDTH * 0.8
-        y_cursor = LABEL_HEIGHT - top_margin
+        img = PILImage.new("RGB", (width_px, height_px), "white")
+        draw = ImageDraw.Draw(img)
 
-        if logo_reader:
-            iw, ih = logo_reader.getSize()
-            scale = min(logo_width_target / iw, logo_height_target / ih)
-            lw, lh = iw * scale, ih * scale
-            x_logo = (LABEL_WIDTH - lw) / 2
-            y_logo = y_cursor - lh
-            c.drawImage(logo_reader, x_logo, y_logo, width=lw, height=lh, preserveAspectRatio=True, mask='auto')
-            y_cursor = y_logo - 0.25 * inch
-        else:
-            y_cursor -= 0.25 * inch
+        # thin border
+        draw.rectangle([1, 1, width_px - 2, height_px - 2], outline="black", width=2)
 
-        # Text block
-        text_style_label = ("Times-Bold", 14)
-        text_style_value = ("Times-Roman", 14)
-        line_leading = 18
+        y_cursor = int(0.2 * height_px)
+
+        # logo placement
+        if logo_img:
+            target_h = int(height_px * 0.18)
+            target_w = int(width_px * 0.8)
+            lw, lh = logo_img.size
+            scale = min(target_w / lw, target_h / lh)
+            new_size = (int(lw * scale), int(lh * scale))
+            logo_resized = logo_img.resize(new_size, PILImage.LANCZOS)
+            x_logo = (width_px - new_size[0]) // 2
+            y_logo = int(0.08 * height_px)
+            img.paste(logo_resized, (x_logo, y_logo), logo_resized)
+            y_cursor = y_logo + new_size[1] + int(0.06 * height_px)
+
         lines = [
             ("Vendor Name", meta.get("vendor_name", "")),
             ("Location", meta.get("location", "")),
@@ -257,31 +279,42 @@ def make_label_pdf(items: list[dict], meta: dict, identifier: str) -> tuple[byte
             ("Weight", f"{format_qty(item.get('quantity'))} {item.get('unit', '')}".strip()),
         ]
 
-        text = c.beginText()
-        text.setTextOrigin(0.5 * inch, y_cursor)
+        line_spacing = int(font_value.size * 1.3)
+        x_text = int(0.1 * width_px)
         for label, val in lines:
-            text.setFont(*text_style_label)
-            text.textOut(f"{label}: ")
-            text.setFont(*text_style_value)
-            text.textLine(str(val))
-            text.setFont(*text_style_label)
-        c.drawText(text)
+            draw.text((x_text, y_cursor), f"{label}:", font=font_label, fill="black")
+            label_w, _ = draw.textsize(f"{label}:", font=font_label)
+            draw.text((x_text + label_w + 10, y_cursor), str(val), font=font_value, fill="black")
+            y_cursor += line_spacing
 
-        # Marker box with filled circle at bottom right
-        box_size = 0.45 * inch
-        box_x = LABEL_WIDTH - box_size - 0.35 * inch
-        box_y = 0.35 * inch
-        c.rect(box_x, box_y, box_size, box_size, stroke=1, fill=0)
-        c.circle(box_x + box_size / 2, box_y + box_size / 2, box_size / 5, stroke=0, fill=1)
+        # marker box bottom right
+        box_size = int(0.12 * height_px)
+        box_x = width_px - box_size - int(0.08 * width_px)
+        box_y = height_px - box_size - int(0.1 * height_px)
+        draw.rectangle([box_x, box_y, box_x + box_size, box_y + box_size], outline="black", width=2)
+        draw.ellipse(
+            [box_x + box_size * 0.3, box_y + box_size * 0.3, box_x + box_size * 0.7, box_y + box_size * 0.7],
+            fill="black",
+            outline=None,
+        )
 
-        c.restoreState()
-        c.showPage()
+        bio = io.BytesIO()
+        img.save(bio, format="PNG")
+        bio.seek(0)
+        safe_item = re.sub(r"[^a-z0-9]+", "_", str(item.get("item", "")).lower()).strip("_") or "item"
+        images.append((f"{safe_item}.png", bio.read()))
 
-    c.save()
-    buf.seek(0)
+    # build zip
+    zip_buf = io.BytesIO()
+    import zipfile
+
+    with zipfile.ZipFile(zip_buf, "w", zipfile.ZIP_DEFLATED) as zf:
+        for fname, data in images:
+            zf.writestr(fname, data)
+    zip_buf.seek(0)
     safe_id = re.sub(r"[^a-z0-9]+", "_", identifier.lower()).strip("_") or "id"
-    filename = f"label_{safe_id}.pdf"
-    return buf.read(), filename
+    filename = f"label_{safe_id}.zip"
+    return zip_buf.read(), filename
 
 
 def render_html(table_df: pd.DataFrame, meta: dict, slip_type: str, identifier: str) -> str:
@@ -434,7 +467,9 @@ def home():
             <form action="/pdf" method="get" style="margin-top:12px;">
               <input type="hidden" name="slip_type" value="{{slip_type}}">
               <input type="hidden" name="identifier" value="{{identifier}}">
-              <button class="btn" type="submit">Download PDF</button>
+              <button class="btn" type="submit">
+                {% if slip_type=='label' %}Download Labels (ZIP){% else %}Download PDF{% endif %}
+              </button>
             </form>
           </div>
         {% endif %}
@@ -457,13 +492,14 @@ def pdf():
         matches, meta = load_matches(raw_df, slip_type, identifier)
         if slip_type == "label":
             label_items = build_label_items(matches, meta)
-            pdf_bytes, filename = make_label_pdf(label_items, meta, identifier)
+            pdf_bytes, filename = make_label_zip(label_items, meta, identifier)
         else:
             table_df = build_table(matches, meta, slip_type)
             pdf_bytes, filename = make_pdf(table_df, meta, slip_type, identifier)
     except Exception as exc:
         return f"Error: {exc}", 400
-    return send_file(io.BytesIO(pdf_bytes), as_attachment=True, download_name=filename, mimetype="application/pdf")
+    mimetype = "application/zip" if slip_type == "label" else "application/pdf"
+    return send_file(io.BytesIO(pdf_bytes), as_attachment=True, download_name=filename, mimetype=mimetype)
 
 
 if __name__ == "__main__":
