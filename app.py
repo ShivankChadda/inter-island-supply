@@ -637,7 +637,6 @@ def home():
       <div class="page">
         <div class="topbar">
           <div class="top-left">
-            <img src="{{ logo_data }}" alt="FGN">
             <span class="top-title">FGN Dispatch Desk</span>
           </div>
           <div class="top-right">
