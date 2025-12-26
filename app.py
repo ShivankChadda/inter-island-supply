@@ -35,6 +35,7 @@ CURRENT_XLSX = DEFAULT_XLSX
 # Branding asset and label sizing in inches / pixels
 LOGO_PATH = "Farmers_Wordmark_Badge_Transparent_1_3000px.png"
 CLIPART_PATH = "Excel clipart.png"
+MARKER_DIR = "Marker box"
 LABEL_WIDTH_IN = 5  # label width in inches (landscape 5x3)
 LABEL_HEIGHT_IN = 3  # label height in inches
 LABEL_DPI = 300  # DPI for high-quality PNG output
@@ -104,6 +105,29 @@ def load_logo_data_uri() -> str:
 
 LOGO_DATA_URI = load_logo_data_uri()
 
+
+def mm_to_px(mm: float) -> int:
+    """Convert millimeters to pixels at LABEL_DPI."""
+    return int(mm / 25.4 * LABEL_DPI)
+
+
+def load_marker_images():
+    """Load marker images from the marker folder keyed by lowercase basename (without extension)."""
+    mapping = {}
+    for key in ("fgn", "rsn", "prashanto"):
+        path = os.path.join(MARKER_DIR, f"{key.upper()}.png")
+        if not os.path.exists(path):
+            path = os.path.join(MARKER_DIR, f"{key}.png")
+        if os.path.exists(path):
+            try:
+                mapping[key] = PILImage.open(path).convert("RGBA")
+            except Exception:
+                continue
+    return mapping
+
+
+MARKER_IMAGES = load_marker_images()
+
 COLS = ["Serial Number", "Item", "Quantity", "Unit"]
 
 
@@ -142,6 +166,7 @@ def load_matches(df: pd.DataFrame, slip_type: str, identifier: str) -> tuple[pd.
         "customer_name": customer_name,
         "vendor_name": first_non_empty(matches["Vendor_Name"], identifier),
         "location": first_non_empty(matches["Vendor_Location"]) if "Vendor_Location" in matches else "",
+        "source": first_non_empty(matches["Source"]) if "Source" in matches else "",
         "ship_name": ship_name,
         "sailing_date": sailing_date,
         "quantity_column": quantity_column,
@@ -283,8 +308,8 @@ def make_label_zip(items: list[dict], meta: dict, identifier: str) -> tuple[byte
                     continue
         return ImageFont.load_default()
 
-    font_label = load_font(48, bold=True)
-    font_value = load_font(48, bold=False)
+    font_label = load_font(46, bold=True)
+    font_value = load_font(46, bold=False)
 
     # pre-load logo
     logo_img = None
@@ -294,28 +319,46 @@ def make_label_zip(items: list[dict], meta: dict, identifier: str) -> tuple[byte
         logo_img = None
 
     images = []
+    border_margin = mm_to_px(11)  # outer border inset
+    inner_border_offset = mm_to_px(2)  # gap between double borders
+    logo_top_space = mm_to_px(14)
+    logo_bottom_space = mm_to_px(11)
+    text_left_margin = mm_to_px(19)
+    text_top_min = mm_to_px(21)
+    line_min_gap = mm_to_px(5)
+    marker_offset = mm_to_px(9)
+    marker_size = mm_to_px(19)
+
     for item in items:
         # Blank white canvas per label
         img = PILImage.new("RGB", (width_px, height_px), "white")
         draw = ImageDraw.Draw(img)
 
-        # thin border
-        draw.rectangle([1, 1, width_px - 2, height_px - 2], outline="black", width=2)
+        # Double border inset from edge
+        outer_rect = [border_margin, border_margin, width_px - border_margin, height_px - border_margin]
+        inner_rect = [
+            outer_rect[0] + inner_border_offset,
+            outer_rect[1] + inner_border_offset,
+            outer_rect[2] - inner_border_offset,
+            outer_rect[3] - inner_border_offset,
+        ]
+        draw.rectangle(outer_rect, outline="black", width=2)
+        draw.rectangle(inner_rect, outline="black", width=2)
 
-        y_cursor = int(0.15 * height_px)
-
-        # logo placement (target ~33% of height)
+        # logo placement (centered, scaled to 55-60% width, <=20% height)
+        y_cursor = logo_top_space + border_margin
         if logo_img:
-            target_h = int(height_px * 0.33)
-            target_w = int(width_px * 0.8)
+            max_w = int(width_px * 0.58)
+            max_h = int(height_px * 0.2)
             lw, lh = logo_img.size
-            scale = min(target_w / lw, target_h / lh)
+            scale = min(max_w / lw, max_h / lh)
             new_size = (int(lw * scale), int(lh * scale))
             logo_resized = logo_img.resize(new_size, PILImage.LANCZOS)
             x_logo = (width_px - new_size[0]) // 2
-            y_logo = int(0.05 * height_px)
+            y_logo = y_cursor
             img.paste(logo_resized, (x_logo, y_logo), logo_resized)
-            y_cursor = y_logo + new_size[1] + int(0.05 * height_px)
+            y_cursor = y_logo + new_size[1] + logo_bottom_space
+        y_cursor = max(y_cursor, text_top_min + border_margin)
 
         lines = [
             ("Vendor Name", meta.get("vendor_name", "")),
@@ -330,9 +373,9 @@ def make_label_zip(items: list[dict], meta: dict, identifier: str) -> tuple[byte
             bbox = font.getbbox(txt)
             return bbox[2] - bbox[0] if bbox else 0
 
-        # Draw each Label: Value line with spacing
-        line_spacing = int(font_value.size * 1.15)
-        x_text = int(0.1 * width_px)
+        # Draw each Label: Value line with spacing (1.45x line height, min 5mm)
+        line_spacing = max(int(font_value.size * 1.45), line_min_gap)
+        x_text = text_left_margin + border_margin
         for label, val in lines:
             label_txt = f"{label}:"
             draw.text((x_text, y_cursor), label_txt, font=font_label, fill="black")
@@ -340,38 +383,28 @@ def make_label_zip(items: list[dict], meta: dict, identifier: str) -> tuple[byte
             draw.text((x_text + label_w + 10, y_cursor), str(val), font=font_value, fill="black")
             y_cursor += line_spacing
 
-        # marker box bottom right with shape based on marker text
-        box_size = int(0.12 * height_px)
-        box_x = width_px - box_size - int(0.08 * width_px)
-        box_y = height_px - box_size - int(0.1 * height_px)
+        # marker box bottom right with icon based on Source
+        box_size = marker_size
+        box_x = width_px - border_margin - marker_offset - box_size
+        box_y = height_px - border_margin - marker_offset - box_size
         draw.rectangle([box_x, box_y, box_x + box_size, box_y + box_size], outline="black", width=2)
-        marker_text = str(meta.get("customer_name", "") or "").lower()
-        if "rsn" in marker_text:
-            # filled circle
-            draw.ellipse(
-                [box_x + box_size * 0.3, box_y + box_size * 0.3, box_x + box_size * 0.7, box_y + box_size * 0.7],
-                fill="black",
-                outline=None,
-            )
-        elif "prashanto" in marker_text:
-            # filled triangle
-            pts = [
-                (box_x + box_size / 2, box_y + box_size * 0.25),
-                (box_x + box_size * 0.75, box_y + box_size * 0.75),
-                (box_x + box_size * 0.25, box_y + box_size * 0.75),
-            ]
-            draw.polygon(pts, fill="black")
-        elif "fgn" in marker_text:
-            # filled diamond
-            pts = [
-                (box_x + box_size / 2, box_y + box_size * 0.2),
-                (box_x + box_size * 0.8, box_y + box_size / 2),
-                (box_x + box_size / 2, box_y + box_size * 0.8),
-                (box_x + box_size * 0.2, box_y + box_size / 2),
-            ]
-            draw.polygon(pts, fill="black")
+        source_key = str(meta.get("source", "") or "").lower()
+        marker_img = None
+        for key in ("fgn", "rsn", "prashanto"):
+            if key in source_key:
+                marker_img = MARKER_IMAGES.get(key)
+                break
+        if marker_img:
+            target = int(box_size * 0.6)
+            miw, mih = marker_img.size
+            scale = min(target / miw, target / mih)
+            new_size = (int(miw * scale), int(mih * scale))
+            marker_resized = marker_img.resize(new_size, PILImage.LANCZOS)
+            mx = box_x + (box_size - new_size[0]) // 2
+            my = box_y + (box_size - new_size[1]) // 2
+            img.paste(marker_resized, (mx, my), marker_resized)
         else:
-            # default circle
+            # default circle if no specific marker
             draw.ellipse(
                 [box_x + box_size * 0.3, box_y + box_size * 0.3, box_x + box_size * 0.7, box_y + box_size * 0.7],
                 fill="black",
@@ -477,50 +510,78 @@ def home():
     uploaded_name = None
 
     if request.method == "POST":
+        # Allow resetting the file without needing other inputs
+        if request.form.get("reset_file") == "1":
+            CURRENT_XLSX = DEFAULT_XLSX
+            uploaded_name = None
+            slip_type = ""
+            identifier = ""
+        else:
         # Read form inputs
-        slip_type = request.form.get("slip_type", "").strip().lower()
-        identifier = request.form.get("identifier", "").strip()
-        upload = request.files.get("workbook")
-        try:
-            if slip_type not in {"order", "purchase", "invoice", "label"}:
-                raise ValueError("Slip type must be order, purchase, invoice, or label.")
-            if not identifier:
-                raise ValueError("Identifier is required.")
+            slip_type = request.form.get("slip_type", "").strip().lower()
+            identifier = request.form.get("identifier", "").strip()
+            upload = request.files.get("workbook")
+            try:
+                if slip_type not in {"order", "purchase", "invoice", "label"}:
+                    raise ValueError("Slip type must be order, purchase, invoice, or label.")
+                if not identifier:
+                    raise ValueError("Identifier is required.")
 
-            # Decide which workbook to read: uploaded or default/current
-            workbook_path = CURRENT_XLSX
-            if upload and upload.filename:
-                # Save uploaded workbook to a temp path and switch CURRENT_XLSX
-                safe_name = re.sub(r"[^A-Za-z0-9._-]+", "_", upload.filename) or "uploaded.xlsx"
-                tmp_path = f"/tmp/{safe_name}"
-                upload.save(tmp_path)
-                CURRENT_XLSX = tmp_path
+                # Decide which workbook to read: uploaded or default/current
                 workbook_path = CURRENT_XLSX
-                uploaded_name = upload.filename
-            elif CURRENT_XLSX == DEFAULT_XLSX:
-                # If nothing has been uploaded yet, require an upload
-                raise ValueError("Please upload the Master Roll (.xlsx) to continue.")
+                if upload and upload.filename:
+                    # Save uploaded workbook to a temp path and switch CURRENT_XLSX
+                    safe_name = re.sub(r"[^A-Za-z0-9._-]+", "_", upload.filename) or "uploaded.xlsx"
+                    tmp_path = f"/tmp/{safe_name}"
+                    upload.save(tmp_path)
+                    CURRENT_XLSX = tmp_path
+                    workbook_path = CURRENT_XLSX
+                    uploaded_name = upload.filename
+                elif CURRENT_XLSX == DEFAULT_XLSX:
+                    # If nothing has been uploaded yet, require an upload
+                    raise ValueError("Please upload the Master Roll (.xlsx) to continue.")
 
-            raw_df = pd.read_excel(workbook_path)
-            matches, meta = load_matches(raw_df, slip_type, identifier)
-            if slip_type == "label":
-                # Labels: show a simple preview list
-                label_items = build_label_items(matches, meta)
-                html_snippet = render_label_preview(label_items, meta)
-            else:
-                # Slips: render HTML table preview
-                table_df = build_table(matches, meta, slip_type)
-                html_snippet = render_html(table_df, meta, slip_type, identifier)
-        except Exception as exc:  # broad to show message to user
-            error = str(exc)
+                raw_df = pd.read_excel(workbook_path)
+                matches, meta = load_matches(raw_df, slip_type, identifier)
+                if slip_type == "label":
+                    # Labels: show a simple preview list
+                    label_items = build_label_items(matches, meta)
+                    html_snippet = render_label_preview(label_items, meta)
+                else:
+                    # Slips: render HTML table preview
+                    table_df = build_table(matches, meta, slip_type)
+                    html_snippet = render_html(table_df, meta, slip_type, identifier)
+            except Exception as exc:  # broad to show message to user
+                error = str(exc)
 
     # status info for header
     file_display = uploaded_name or os.path.basename(CURRENT_XLSX)
     try:
-        last_updated = date.fromtimestamp(os.path.getmtime(CURRENT_XLSX)).strftime("%d %b %Y")
+        last_updated = date.fromtimestamp(os.path.getmtime(CURRENT_XLSX)).strftime("%d %B %Y, %H:%M")
     except Exception:
         last_updated = "unknown"
     today_str = date.today().strftime("%d %b %Y")
+    status_text = "Master Roll loaded" if CURRENT_XLSX != DEFAULT_XLSX else "Default Master Roll"
+
+    # file summary for preview card
+    file_rows = None
+    file_cols = []
+    try:
+        tmp_df = pd.read_excel(CURRENT_XLSX, nrows=5000)  # limit for speed
+        file_rows = len(tmp_df)
+        key_cols = [
+            "Vendor_Name",
+            "Vendor_Code",
+            "Source",
+            "Item_Name",
+            "Quantity",
+            "Packed_Quantity",
+            "Ship_Name",
+            "Sailing_Date",
+        ]
+        file_cols = [c for c in key_cols if c in tmp_df.columns]
+    except Exception:
+        file_rows = None
 
     template = """
     <!doctype html>
@@ -536,18 +597,17 @@ def home():
         body { font-family: 'Bell MT','CMU Serif','Computer Modern',serif; background:var(--bg); padding:16px 16px 12px 16px; font-size:18px; }
         .page { max-width: 1050px; margin: 0 auto; }
         .topbar { display:flex; align-items:center; justify-content:space-between; padding:10px 14px; border:1px solid var(--border); border-radius:10px; background:white; box-shadow:0 6px 16px rgba(0,0,0,0.08); margin-bottom:14px; }
-        .top-left { display:flex; align-items:center; gap:10px; }
-        .top-left img { height:32px; width:auto; }
-        .top-title { font-size:22px; font-weight:bold; color: var(--border); }
+        .top-left { display:flex; align-items:center; gap:10px; font-size:22px; font-weight:bold; color: var(--border); }
         .top-right { text-align:right; font-family: 'Courier New', monospace; font-size:14px; line-height:1.4; color:#333; }
-        .grid { display: grid; grid-template-columns: 1fr; gap: 14px; }
+        .grid { display: grid; grid-template-columns: 1fr; gap: 12px; }
         @media (min-width: 900px) { .grid { grid-template-columns: 1fr 1.2fr; } }
         .card { background:white; padding:20px 24px; border-radius:12px; box-shadow: 0 8px 24px rgba(0,0,0,0.08); border:1px solid #d6c9b5; }
         .card-primary { border:2px solid var(--border); box-shadow: 0 10px 26px rgba(0,0,0,0.1); }
+        .card-secondary { border:1px solid #e8dcc7; }
         .card-secondary.active { border:2px solid var(--primary); box-shadow: 0 10px 26px rgba(181,144,109,0.25); }
         .card h2 { margin-top:0; text-align:left; }
-        label { display:block; margin-top:12px; font-weight:bold; text-align:left; }
-        input, select { padding:10px; width: 100%; font-size:18px; font-family: 'Bell MT','CMU Serif','Computer Modern',serif; text-align:left; border:1px solid var(--border); border-radius:8px; box-sizing:border-box; background:white; }
+        label { display:block; margin-top:18px; margin-bottom:8px; font-weight:bold; text-align:left; }
+        input, select { padding:10px; width: 100%; font-size:18px; font-family: 'Bell MT','CMU Serif','Computer Modern',serif; text-align:left; border:1px solid var(--border); border-radius:8px; box-sizing:border-box; background:white; margin-bottom:16px; }
         .btn { margin-top:16px; padding:14px 18px; background:#9a7754; color:white; border:1px solid var(--border); cursor:pointer; font-size:18px; font-family: 'Bell MT','CMU Serif','Computer Modern',serif; border-radius:8px; width:100%; transition: all 0.15s ease; }
         .btn:hover { background:#826340; box-shadow: 0 6px 12px rgba(0,0,0,0.12); }
         .microcopy { font-size:13px; color:#444; margin-top:6px; text-align:left; }
@@ -556,12 +616,20 @@ def home():
         .result { margin-top:10px; text-align:left; }
         .preview-card { min-height: 300px; }
         .header-title { display:none; }
-        .dropzone { border:2px dashed var(--border); border-radius:12px; background:#fff; padding:20px; text-align:center; cursor:pointer; transition: background 0.2s, border-color 0.2s; }
+        .dropzone { border:1px dashed var(--border); border-radius:12px; background:#fff; padding:16px; text-align:center; cursor:pointer; transition: background 0.2s, border-color 0.2s; }
         .dropzone.hover { background: #f8f1e4; border-color: var(--primary); }
-        .dropzone img { width: 56px; height: auto; display:block; margin:0 auto 10px; }
+        .dropzone img { width: 48px; height: auto; display:block; margin:0 auto 10px; }
         .dropzone .dz-title { font-weight:bold; margin-bottom:4px; }
         .dropzone .dz-sub { color:#555; font-size:16px; }
         .dropzone input { display:none; }
+        .file-preview { border:1px solid var(--border); border-radius:10px; padding:14px; background:#fff; display:flex; align-items:center; gap:12px; box-shadow:0 6px 16px rgba(0,0,0,0.08); margin-bottom:16px; }
+        .file-preview img { width:48px; height:auto; }
+        .file-meta { flex:1; text-align:left; }
+        .file-meta .name { font-weight:bold; color:var(--border); }
+        .file-meta .meta-line { font-size:14px; color:#555; }
+        .file-actions { display:flex; gap:8px; }
+        .file-actions button { padding:8px 10px; font-size:14px; border-radius:8px; border:1px solid var(--border); background:#f8f1e4; cursor:pointer; }
+        .file-actions button:hover { background:#e6d7c0; }
         footer { margin-top:18px; text-align:center; font-size:14px; color:#444; }
       </style>
     </head>
@@ -573,9 +641,10 @@ def home():
             <span class="top-title">FGN Dispatch Desk</span>
           </div>
           <div class="top-right">
-            <div>Today: {{ today_str }}</div>
+            <div>Status: {{ status_text }}</div>
             <div>File: {{ file_display }}</div>
-            <div>Last updated: {{ last_updated }}</div>
+            <div>Last Updated: {{ last_updated }}</div>
+            <div>Today: {{ today_str }}</div>
           </div>
         </div>
         <div class="grid">
@@ -592,13 +661,29 @@ def home():
               </select>
               <label for="identifier">Vendor name/code or Source</label>
               <input type="text" id="identifier" name="identifier" value="{{identifier}}" required placeholder="e.g., Prabhu, SKT C/BAY, or RSN" />
-              <label for="workbook">Upload your Master Roll (drag & drop or click)</label>
-              <div id="drop-zone" class="dropzone">
-                <img src="{{ clipart_data }}" alt="Excel file" />
-                <div class="dz-title">Drag & Drop</div>
-                <div class="dz-sub">or click to browse (.xlsx)</div>
-                <input type="file" id="workbook" name="workbook" accept=".xlsx" required />
-              </div>
+              <label for="workbook">Upload your Master Roll</label>
+              {% if has_custom_file %}
+                <div class="file-preview">
+                  <img src="{{ clipart_data }}" alt="Excel file" />
+                  <div class="file-meta">
+                    <div class="name">{{ file_display }}</div>
+                    <div class="meta-line">Status: Master Roll loaded</div>
+                    {% if file_rows is not none %}<div class="meta-line">Rows: {{ file_rows }} | Columns: {{ file_cols|join(', ') }}</div>{% endif %}
+                  </div>
+                  <div class="file-actions">
+                    <button type="button" id="replace-btn">Replace</button>
+                    <button type="submit" name="reset_file" value="1">Remove</button>
+                  </div>
+                </div>
+                <input type="file" id="workbook" name="workbook" accept=".xlsx" style="display:none;" />
+              {% else %}
+                <div id="drop-zone" class="dropzone">
+                  <img src="{{ clipart_data }}" alt="Excel file" />
+                  <div class="dz-title">Drag & Drop</div>
+                  <div class="dz-sub">or click to browse (.xlsx)</div>
+                  <input type="file" id="workbook" name="workbook" accept=".xlsx" required />
+                </div>
+              {% endif %}
               <button class="btn" type="submit">Generate</button>
               <div class="microcopy">Generates preview before download.</div>
               {% if uploaded_name %}<div style="margin-top:6px; color:#444; text-align:left;">Using uploaded file: {{uploaded_name}}</div>{% endif %}
@@ -628,19 +713,25 @@ def home():
       <script>
         const dropZone = document.getElementById('drop-zone');
         const fileInput = document.getElementById('workbook');
-        dropZone.addEventListener('click', () => fileInput.click());
-        dropZone.addEventListener('dragover', (e) => {
-          e.preventDefault();
-          dropZone.classList.add('hover');
-        });
-        dropZone.addEventListener('dragleave', () => dropZone.classList.remove('hover'));
-        dropZone.addEventListener('drop', (e) => {
-          e.preventDefault();
-          dropZone.classList.remove('hover');
-          if (e.dataTransfer.files && e.dataTransfer.files.length) {
-            fileInput.files = e.dataTransfer.files;
-          }
-        });
+        const replaceBtn = document.getElementById('replace-btn');
+        if (dropZone) {
+          dropZone.addEventListener('click', () => fileInput.click());
+          dropZone.addEventListener('dragover', (e) => {
+            e.preventDefault();
+            dropZone.classList.add('hover');
+          });
+          dropZone.addEventListener('dragleave', () => dropZone.classList.remove('hover'));
+          dropZone.addEventListener('drop', (e) => {
+            e.preventDefault();
+            dropZone.classList.remove('hover');
+            if (e.dataTransfer.files && e.dataTransfer.files.length) {
+              fileInput.files = e.dataTransfer.files;
+            }
+          });
+        }
+        if (replaceBtn) {
+          replaceBtn.addEventListener('click', () => fileInput.click());
+        }
       </script>
     </body>
     </html>
@@ -652,6 +743,14 @@ def home():
         slip_type=slip_type,
         identifier=identifier,
         clipart_data=CLIPART_DATA_URI,
+        logo_data=LOGO_DATA_URI,
+        today_str=today_str,
+        file_display=file_display,
+        last_updated=last_updated,
+        status_text=status_text,
+        file_rows=file_rows,
+        file_cols=file_cols,
+        has_custom_file=(CURRENT_XLSX != DEFAULT_XLSX),
     )
 
 
