@@ -12,6 +12,7 @@ import io  # in-memory buffers for PDF/ZIP creation
 import re  # simple string sanitizing for filenames
 from datetime import date, datetime  # for stamping current date/time
 import os  # file mtime for status bar
+from zoneinfo import ZoneInfo  # local timezone handling
 
 import pandas as pd  # Excel parsing and data shaping
 from flask import Flask, render_template_string, request, send_file  # web server + templating
@@ -31,7 +32,8 @@ app = Flask(__name__)
 DEFAULT_XLSX = "Master Roll.xlsx"
 # In-memory pointer to the most recent uploaded workbook; falls back to DEFAULT_XLSX
 CURRENT_XLSX = DEFAULT_XLSX
-LAST_PROCESSED_AT = None  # track last processed timestamp for UI
+LAST_PROCESSED_AT = None  # track last processed timestamp for UI (localized)
+LOCAL_TZ = ZoneInfo("Asia/Kolkata")  # adjust to your local timezone
 
 # Branding asset and label sizing in inches / pixels
 LOGO_PATH = "Farmers_Wordmark_Badge_Transparent_1_3000px.png"
@@ -553,7 +555,7 @@ def home():
                     upload.save(tmp_path)
                     CURRENT_XLSX = tmp_path
                     uploaded_name = upload.filename
-                    LAST_PROCESSED_AT = datetime.now().strftime("%d %b %Y, %I:%M %p")
+                    LAST_PROCESSED_AT = datetime.now(LOCAL_TZ).strftime("%d %b %Y, %I:%M %p")
                 if CURRENT_XLSX == DEFAULT_XLSX and not upload:
                     raise ValueError("Please upload the Master Roll (.xlsx) to continue.")
 
@@ -581,7 +583,7 @@ def home():
                     workbook_path = CURRENT_XLSX
                     raw_df = pd.read_excel(workbook_path)
                     matches, meta = load_matches(raw_df, slip_type, identifier)
-                    LAST_PROCESSED_AT = datetime.now().strftime("%d %b %Y, %I:%M %p")
+                    LAST_PROCESSED_AT = datetime.now(LOCAL_TZ).strftime("%d %b %Y, %I:%M %p")
                     if slip_type == "label":
                         # Labels: show a simple preview list
                         label_items = build_label_items(matches, meta)
@@ -596,10 +598,10 @@ def home():
     # status info for header
     file_display = uploaded_name or os.path.basename(CURRENT_XLSX)
     try:
-        file_modified = datetime.fromtimestamp(os.path.getmtime(CURRENT_XLSX)).strftime("%d %b %Y, %I:%M %p")
+        file_modified = datetime.fromtimestamp(os.path.getmtime(CURRENT_XLSX), tz=LOCAL_TZ).strftime("%d %b %Y, %I:%M %p")
     except Exception:
         file_modified = "unknown"
-    today_str = date.today().strftime("%d %b %Y")
+    today_str = datetime.now(LOCAL_TZ).strftime("%d %b %Y")
     status_text = "Master Roll loaded" if CURRENT_XLSX != DEFAULT_XLSX else "Default Master Roll"
     last_processed = LAST_PROCESSED_AT or "Not processed"
 
