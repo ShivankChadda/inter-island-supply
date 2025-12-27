@@ -10,7 +10,7 @@ Then open http://127.0.0.1:5000 and use the form.
 import base64  # for embedding clipart inline
 import io  # in-memory buffers for PDF/ZIP creation
 import re  # simple string sanitizing for filenames
-from datetime import date  # for stamping current date
+from datetime import date, datetime  # for stamping current date/time
 import os  # file mtime for status bar
 
 import pandas as pd  # Excel parsing and data shaping
@@ -31,6 +31,7 @@ app = Flask(__name__)
 DEFAULT_XLSX = "Master Roll.xlsx"
 # In-memory pointer to the most recent uploaded workbook; falls back to DEFAULT_XLSX
 CURRENT_XLSX = DEFAULT_XLSX
+LAST_PROCESSED_AT = None  # track last processed timestamp for UI
 
 # Branding asset and label sizing in inches / pixels
 LOGO_PATH = "Farmers_Wordmark_Badge_Transparent_1_3000px.png"
@@ -503,11 +504,15 @@ def render_label_preview(items: list[dict], meta: dict) -> str:
 @app.route("/", methods=["GET", "POST"])
 def home():
     global CURRENT_XLSX
+    global LAST_PROCESSED_AT
     error = None
     html_snippet = None
     slip_type = ""
     identifier = ""
     uploaded_name = None
+    upload_only = False
+    file_rows = None
+    file_cols = []
 
     if request.method == "POST":
         # Allow resetting the file without needing other inputs
@@ -516,72 +521,89 @@ def home():
             uploaded_name = None
             slip_type = ""
             identifier = ""
+            LAST_PROCESSED_AT = None
         else:
-        # Read form inputs
+            # Read form inputs
             slip_type = request.form.get("slip_type", "").strip().lower()
             identifier = request.form.get("identifier", "").strip()
             upload = request.files.get("workbook")
+            upload_only = request.form.get("upload_only") == "1"
             try:
-                if slip_type not in {"order", "purchase", "invoice", "label"}:
-                    raise ValueError("Slip type must be order, purchase, invoice, or label.")
-                if not identifier:
-                    raise ValueError("Identifier is required.")
-
-                # Decide which workbook to read: uploaded or default/current
-                workbook_path = CURRENT_XLSX
+                # Process upload first (always)
                 if upload and upload.filename:
-                    # Save uploaded workbook to a temp path and switch CURRENT_XLSX
                     safe_name = re.sub(r"[^A-Za-z0-9._-]+", "_", upload.filename) or "uploaded.xlsx"
                     tmp_path = f"/tmp/{safe_name}"
                     upload.save(tmp_path)
                     CURRENT_XLSX = tmp_path
-                    workbook_path = CURRENT_XLSX
                     uploaded_name = upload.filename
-                elif CURRENT_XLSX == DEFAULT_XLSX:
-                    # If nothing has been uploaded yet, require an upload
+                    LAST_PROCESSED_AT = datetime.now().strftime("%d %b %Y, %I:%M %p")
+                if CURRENT_XLSX == DEFAULT_XLSX and not upload:
                     raise ValueError("Please upload the Master Roll (.xlsx) to continue.")
 
-                raw_df = pd.read_excel(workbook_path)
-                matches, meta = load_matches(raw_df, slip_type, identifier)
-                if slip_type == "label":
-                    # Labels: show a simple preview list
-                    label_items = build_label_items(matches, meta)
-                    html_snippet = render_label_preview(label_items, meta)
+                # If upload-only, stop after updating file state
+                if upload_only:
+                    raw_df = pd.read_excel(CURRENT_XLSX, nrows=5000)
+                    file_rows = len(raw_df)
+                    key_cols = [
+                        "Vendor_Name",
+                        "Vendor_Code",
+                        "Source",
+                        "Item_Name",
+                        "Quantity",
+                        "Packed_Quantity",
+                        "Ship_Name",
+                        "Sailing_Date",
+                    ]
+                    file_cols = [c for c in key_cols if c in raw_df.columns]
                 else:
-                    # Slips: render HTML table preview
-                    table_df = build_table(matches, meta, slip_type)
-                    html_snippet = render_html(table_df, meta, slip_type, identifier)
+                    if slip_type not in {"order", "purchase", "invoice", "label"}:
+                        raise ValueError("Slip type must be order, purchase, invoice, or label.")
+                    if not identifier:
+                        raise ValueError("Identifier is required.")
+
+                    workbook_path = CURRENT_XLSX
+                    raw_df = pd.read_excel(workbook_path)
+                    matches, meta = load_matches(raw_df, slip_type, identifier)
+                    LAST_PROCESSED_AT = datetime.now().strftime("%d %b %Y, %I:%M %p")
+                    if slip_type == "label":
+                        # Labels: show a simple preview list
+                        label_items = build_label_items(matches, meta)
+                        html_snippet = render_label_preview(label_items, meta)
+                    else:
+                        # Slips: render HTML table preview
+                        table_df = build_table(matches, meta, slip_type)
+                        html_snippet = render_html(table_df, meta, slip_type, identifier)
             except Exception as exc:  # broad to show message to user
                 error = str(exc)
 
     # status info for header
     file_display = uploaded_name or os.path.basename(CURRENT_XLSX)
     try:
-        last_updated = date.fromtimestamp(os.path.getmtime(CURRENT_XLSX)).strftime("%d %B %Y, %H:%M")
+        file_modified = datetime.fromtimestamp(os.path.getmtime(CURRENT_XLSX)).strftime("%d %b %Y, %I:%M %p")
     except Exception:
-        last_updated = "unknown"
+        file_modified = "unknown"
     today_str = date.today().strftime("%d %b %Y")
     status_text = "Master Roll loaded" if CURRENT_XLSX != DEFAULT_XLSX else "Default Master Roll"
+    last_processed = LAST_PROCESSED_AT or "Not processed"
 
-    # file summary for preview card
-    file_rows = None
-    file_cols = []
-    try:
-        tmp_df = pd.read_excel(CURRENT_XLSX, nrows=5000)  # limit for speed
-        file_rows = len(tmp_df)
-        key_cols = [
-            "Vendor_Name",
-            "Vendor_Code",
-            "Source",
-            "Item_Name",
-            "Quantity",
-            "Packed_Quantity",
-            "Ship_Name",
-            "Sailing_Date",
-        ]
-        file_cols = [c for c in key_cols if c in tmp_df.columns]
-    except Exception:
-        file_rows = None
+    # file summary for preview card (if not already from upload-only branch)
+    if file_rows is None:
+        try:
+            tmp_df = pd.read_excel(CURRENT_XLSX, nrows=5000)  # limit for speed
+            file_rows = len(tmp_df)
+            key_cols = [
+                "Vendor_Name",
+                "Vendor_Code",
+                "Source",
+                "Item_Name",
+                "Quantity",
+                "Packed_Quantity",
+                "Ship_Name",
+                "Sailing_Date",
+            ]
+            file_cols = [c for c in key_cols if c in tmp_df.columns]
+        except Exception:
+            file_rows = None
 
     template = """
     <!doctype html>
@@ -616,19 +638,22 @@ def home():
         .result { margin-top:10px; text-align:left; }
         .preview-card { min-height: 300px; }
         .header-title { display:none; }
-        .dropzone { border:1px dashed var(--border); border-radius:12px; background:#fff; padding:16px; text-align:center; cursor:pointer; transition: background 0.2s, border-color 0.2s; }
-        .dropzone.hover { background: #f8f1e4; border-color: var(--primary); }
-        .dropzone img { width: 48px; height: auto; display:block; margin:0 auto 10px; }
-        .dropzone .dz-title { font-weight:bold; margin-bottom:4px; }
-        .dropzone .dz-sub { color:#555; font-size:16px; }
+        .dropzone { border:1.5px dashed #a6937f; border-radius:12px; background:rgba(181,144,109,0.05); padding:16px; text-align:center; cursor:pointer; transition: all 0.2s ease; box-shadow: none; }
+        .dropzone.hover { background: rgba(181,144,109,0.08); border:1.5px solid #8c7458; box-shadow: 0 8px 18px rgba(0,0,0,0.08); }
+        .dropzone img { width: 52px; height: auto; display:block; margin:0 auto 10px; }
+        .dropzone .dz-title { font-weight:600; margin-bottom:8px; font-size:17px; color:#3a342c; }
+        .dropzone .dz-sub { color:#555; font-size:13px; margin-bottom:6px; }
+        .dropzone .dz-hint { color:#777; font-size:12px; }
         .dropzone input { display:none; }
         .file-preview { border:1px solid var(--border); border-radius:10px; padding:14px; background:#fff; display:flex; align-items:center; gap:12px; box-shadow:0 6px 16px rgba(0,0,0,0.08); margin-bottom:16px; }
-        .file-preview img { width:48px; height:auto; }
+        .file-preview img { width:52px; height:auto; }
         .file-meta { flex:1; text-align:left; }
-        .file-meta .name { font-weight:bold; color:var(--border); }
-        .file-meta .meta-line { font-size:14px; color:#555; }
-        .file-actions { display:flex; gap:8px; }
-        .file-actions button { padding:8px 10px; font-size:14px; border-radius:8px; border:1px solid var(--border); background:#f8f1e4; cursor:pointer; }
+        .file-meta .name { font-weight:600; color:var(--border); font-size:15px; }
+        .file-meta .status-pill { display:inline-block; padding:4px 8px; border-radius:10px; background:#e1f3e1; color:#2e7d32; font-size:12px; margin-top:4px; }
+        .file-meta .meta-line { font-size:13px; color:#555; margin-top:4px; }
+        .file-actions { display:flex; gap:10px; }
+        .file-actions button { padding:8px 12px; font-size:14px; border-radius:10px; border:1px solid var(--border); background:#f8f1e4; cursor:pointer; height:34px; }
+        .file-actions button.primary { background:#fff; }
         .file-actions button:hover { background:#e6d7c0; }
         footer { margin-top:18px; text-align:center; font-size:14px; color:#444; }
       </style>
@@ -642,7 +667,8 @@ def home():
           <div class="top-right">
             <div>Status: {{ status_text }}</div>
             <div>File: {{ file_display }}</div>
-            <div>Last Updated: {{ last_updated }}</div>
+            <div>Last processed: {{ last_processed }}</div>
+            <div>File modified: {{ file_modified }}</div>
             <div>Today: {{ today_str }}</div>
           </div>
         </div>
@@ -650,6 +676,7 @@ def home():
           <div class="card card-primary">
             <h2>Slip Generator</h2>
             <form method="post" enctype="multipart/form-data">
+              <input type="hidden" name="upload_only" id="upload_only" value="">
               <label for="slip_type">Slip type</label>
               <select name="slip_type" id="slip_type" required>
                 <option value="" {% if not slip_type %}selected{% endif %}></option>
@@ -666,11 +693,13 @@ def home():
                   <img src="{{ clipart_data }}" alt="Excel file" />
                   <div class="file-meta">
                     <div class="name">{{ file_display }}</div>
-                    <div class="meta-line">Status: Master Roll loaded</div>
+                    <div class="status-pill">Loaded</div>
                     {% if file_rows is not none %}<div class="meta-line">Rows: {{ file_rows }} | Columns: {{ file_cols|join(', ') }}</div>{% endif %}
+                    <div class="meta-line">Last processed: {{ last_processed }}</div>
+                    <div class="meta-line">File modified: {{ file_modified }}</div>
                   </div>
                   <div class="file-actions">
-                    <button type="button" id="replace-btn">Replace</button>
+                    <button type="button" class="primary" id="replace-btn">Replace</button>
                     <button type="submit" name="reset_file" value="1">Remove</button>
                   </div>
                 </div>
@@ -678,8 +707,9 @@ def home():
               {% else %}
                 <div id="drop-zone" class="dropzone">
                   <img src="{{ clipart_data }}" alt="Excel file" />
-                  <div class="dz-title">Drag & Drop</div>
+                  <div class="dz-title">Drop Master Roll here</div>
                   <div class="dz-sub">or click to browse (.xlsx)</div>
+                  <div class="dz-hint">Excel files only (.xlsx)</div>
                   <input type="file" id="workbook" name="workbook" accept=".xlsx" required />
                 </div>
               {% endif %}
@@ -712,7 +742,21 @@ def home():
       <script>
         const dropZone = document.getElementById('drop-zone');
         const fileInput = document.getElementById('workbook');
+        const uploadOnly = document.getElementById('upload_only');
         const replaceBtn = document.getElementById('replace-btn');
+        const slipSelect = document.getElementById('slip_type');
+        const identifierInput = document.getElementById('identifier');
+
+        function triggerUpload(files) {
+          if (!files || !files.length) return;
+          fileInput.files = files;
+          // allow submission without slip/identifier for upload-only
+          if (slipSelect) slipSelect.removeAttribute('required');
+          if (identifierInput) identifierInput.removeAttribute('required');
+          if (uploadOnly) uploadOnly.value = "1";
+          fileInput.form.submit();
+        }
+
         if (dropZone) {
           dropZone.addEventListener('click', () => fileInput.click());
           dropZone.addEventListener('dragover', (e) => {
@@ -724,12 +768,14 @@ def home():
             e.preventDefault();
             dropZone.classList.remove('hover');
             if (e.dataTransfer.files && e.dataTransfer.files.length) {
-              fileInput.files = e.dataTransfer.files;
+              triggerUpload(e.dataTransfer.files);
             }
           });
+          fileInput.addEventListener('change', (e) => triggerUpload(e.target.files));
         }
         if (replaceBtn) {
           replaceBtn.addEventListener('click', () => fileInput.click());
+          fileInput.addEventListener('change', (e) => triggerUpload(e.target.files));
         }
       </script>
     </body>
@@ -750,6 +796,8 @@ def home():
         file_rows=file_rows,
         file_cols=file_cols,
         has_custom_file=(CURRENT_XLSX != DEFAULT_XLSX),
+        file_modified=file_modified,
+        last_processed=last_processed,
     )
 
 
