@@ -124,6 +124,22 @@ def load_marker_images():
     return mapping
 
 
+def normalize_source_name(source: str) -> str:
+    """Normalize Source to match marker filenames."""
+    if not isinstance(source, str):
+        return ""
+    s = source.strip().lower()
+    aliases = {
+        "fgn": "fgn",
+        "f.g.n": "fgn",
+        "rsn": "rsn",
+        "r.s.n": "rsn",
+        "prashanto": "prashanto",
+        "prashanto.": "prashanto",
+    }
+    return aliases.get(s, s)
+
+
 MARKER_IMAGES = load_marker_images()
 
 COLS = ["Serial Number", "Item", "Quantity", "Unit"]
@@ -388,12 +404,14 @@ def make_label_zip(items: list[dict], meta: dict, identifier: str) -> tuple[byte
         box_x = width_px - border_margin - marker_offset - box_size
         box_y = height_px - border_margin - marker_offset - box_size
         draw.rectangle([box_x, box_y, box_x + box_size, box_y + box_size], outline="black", width=2)
-        source_key = str(meta.get("source", "") or "").lower().strip()
-        marker_img = None
-        for key in MARKER_IMAGES.keys():
-            if key in source_key:
-                marker_img = MARKER_IMAGES.get(key)
-                break
+        source_key = normalize_source_name(meta.get("source", ""))
+        marker_img = MARKER_IMAGES.get(source_key)
+        if not marker_img:
+            # fallback: substring match
+            for key in MARKER_IMAGES.keys():
+                if key in source_key:
+                    marker_img = MARKER_IMAGES.get(key)
+                    break
         if marker_img:
             target = int(box_size * 0.42)
             miw, mih = marker_img.size
