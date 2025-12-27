@@ -107,23 +107,20 @@ def load_logo_data_uri() -> str:
 LOGO_DATA_URI = load_logo_data_uri()
 
 
-def mm_to_px(mm: float) -> int:
-    """Convert millimeters to pixels at LABEL_DPI."""
-    return int(mm / 25.4 * LABEL_DPI)
-
-
 def load_marker_images():
     """Load marker images from the marker folder keyed by lowercase basename (without extension)."""
     mapping = {}
-    for key in ("fgn", "rsn", "prashanto"):
-        path = os.path.join(MARKER_DIR, f"{key.upper()}.png")
-        if not os.path.exists(path):
-            path = os.path.join(MARKER_DIR, f"{key}.png")
-        if os.path.exists(path):
-            try:
-                mapping[key] = PILImage.open(path).convert("RGBA")
-            except Exception:
-                continue
+    if not os.path.isdir(MARKER_DIR):
+        return mapping
+    for fname in os.listdir(MARKER_DIR):
+        if not fname.lower().endswith(".png"):
+            continue
+        key = os.path.splitext(fname)[0].lower().strip()
+        path = os.path.join(MARKER_DIR, fname)
+        try:
+            mapping[key] = PILImage.open(path).convert("RGBA")
+        except Exception:
+            continue
     return mapping
 
 
@@ -309,8 +306,8 @@ def make_label_zip(items: list[dict], meta: dict, identifier: str) -> tuple[byte
                     continue
         return ImageFont.load_default()
 
-    font_label = load_font(46, bold=True)
-    font_value = load_font(46, bold=False)
+    font_label = load_font(40, bold=True)
+    font_value = load_font(40, bold=False)
 
     # pre-load logo
     logo_img = None
@@ -320,15 +317,15 @@ def make_label_zip(items: list[dict], meta: dict, identifier: str) -> tuple[byte
         logo_img = None
 
     images = []
-    border_margin = mm_to_px(11)  # outer border inset
-    inner_border_offset = mm_to_px(2)  # gap between double borders
-    logo_top_space = mm_to_px(14)
-    logo_bottom_space = mm_to_px(11)
-    text_left_margin = mm_to_px(19)
-    text_top_min = mm_to_px(21)
-    line_min_gap = mm_to_px(5)
-    marker_offset = mm_to_px(9)
-    marker_size = mm_to_px(19)
+    # Fixed composition in px for 5x3" @300dpi (1500x900)
+    border_margin = 60  # 0.20" from edges
+    inner_border_offset = 2  # gap between double borders
+    logo_top_space = 66  # ~0.22" below inner border
+    logo_bottom_space = 60  # gap below logo before text
+    text_left_margin = 105  # ~0.35" inset from inner border
+    line_min_gap = 46  # approx 1.15x 40px
+    marker_offset = 54  # inset from inner border
+    marker_size = 156  # ~0.52"
 
     for item in items:
         # Blank white canvas per label
@@ -347,9 +344,10 @@ def make_label_zip(items: list[dict], meta: dict, identifier: str) -> tuple[byte
         draw.rectangle(inner_rect, outline="black", width=2)
 
         # logo placement (centered, scaled to 55-60% width, <=20% height)
-        y_cursor = logo_top_space + border_margin
+        y_cursor = border_margin + logo_top_space
         if logo_img:
-            max_w = int(width_px * 0.58)
+            max_w = int(width_px * 0.5) if width_px * 0.5 < 750 else 750
+            max_w = max(max_w, 660)
             max_h = int(height_px * 0.2)
             lw, lh = logo_img.size
             scale = min(max_w / lw, max_h / lh)
@@ -359,7 +357,8 @@ def make_label_zip(items: list[dict], meta: dict, identifier: str) -> tuple[byte
             y_logo = y_cursor
             img.paste(logo_resized, (x_logo, y_logo), logo_resized)
             y_cursor = y_logo + new_size[1] + logo_bottom_space
-        y_cursor = max(y_cursor, text_top_min + border_margin)
+        # Ensure text starts below logo with defined gap
+        text_y = y_cursor
 
         lines = [
             ("Vendor Name", meta.get("vendor_name", "")),
@@ -379,24 +378,24 @@ def make_label_zip(items: list[dict], meta: dict, identifier: str) -> tuple[byte
         x_text = text_left_margin + border_margin
         for label, val in lines:
             label_txt = f"{label}:"
-            draw.text((x_text, y_cursor), label_txt, font=font_label, fill="black")
+            draw.text((x_text, text_y), label_txt, font=font_label, fill="black")
             label_w = text_width(label_txt, font_label)
-            draw.text((x_text + label_w + 10, y_cursor), str(val), font=font_value, fill="black")
-            y_cursor += line_spacing
+            draw.text((x_text + label_w + 10, text_y), str(val), font=font_value, fill="black")
+            text_y += line_spacing
 
         # marker box bottom right with icon based on Source
         box_size = marker_size
         box_x = width_px - border_margin - marker_offset - box_size
         box_y = height_px - border_margin - marker_offset - box_size
         draw.rectangle([box_x, box_y, box_x + box_size, box_y + box_size], outline="black", width=2)
-        source_key = str(meta.get("source", "") or "").lower()
+        source_key = str(meta.get("source", "") or "").lower().strip()
         marker_img = None
-        for key in ("fgn", "rsn", "prashanto"):
+        for key in MARKER_IMAGES.keys():
             if key in source_key:
                 marker_img = MARKER_IMAGES.get(key)
                 break
         if marker_img:
-            target = int(box_size * 0.6)
+            target = int(box_size * 0.42)
             miw, mih = marker_img.size
             scale = min(target / miw, target / mih)
             new_size = (int(miw * scale), int(mih * scale))
@@ -791,7 +790,6 @@ def home():
         logo_data=LOGO_DATA_URI,
         today_str=today_str,
         file_display=file_display,
-        last_updated=last_updated,
         status_text=status_text,
         file_rows=file_rows,
         file_cols=file_cols,
