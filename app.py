@@ -410,7 +410,6 @@ def make_label_zip(items: list[dict], meta: dict, identifier: str) -> tuple[byte
         box_size = marker_size
         box_x = width_px - border_margin - marker_offset - box_size
         box_y = height_px - border_margin - marker_offset - box_size
-        draw.rectangle([box_x, box_y, box_x + box_size, box_y + box_size], outline="black", width=2)
         source_key = item.get("source_key") or normalize_source_name(meta.get("source", ""))
         marker_img = MARKER_IMAGES.get(source_key)
         if not marker_img:
@@ -420,21 +419,17 @@ def make_label_zip(items: list[dict], meta: dict, identifier: str) -> tuple[byte
                     marker_img = MARKER_IMAGES.get(key)
                     break
         if marker_img:
-            target = int(box_size * 0.42)
+            # Scale marker image to occupy the marker area, preserve aspect, no container
             miw, mih = marker_img.size
-            scale = min(target / miw, target / mih)
+            scale = min(box_size / miw, box_size / mih)
             new_size = (int(miw * scale), int(mih * scale))
             marker_resized = marker_img.resize(new_size, PILImage.LANCZOS)
             mx = box_x + (box_size - new_size[0]) // 2
             my = box_y + (box_size - new_size[1]) // 2
             img.paste(marker_resized, (mx, my), marker_resized)
         else:
-            # default circle if no specific marker
-            draw.ellipse(
-                [box_x + box_size * 0.3, box_y + box_size * 0.3, box_x + box_size * 0.7, box_y + box_size * 0.7],
-                fill="black",
-                outline=None,
-            )
+            # default simple dot if no marker available
+            draw.ellipse([box_x, box_y, box_x + box_size, box_y + box_size], fill="black", outline=None)
 
         # Save this label to in-memory PNG
         bio = io.BytesIO()
