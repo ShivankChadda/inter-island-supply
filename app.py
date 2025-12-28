@@ -844,5 +844,23 @@ def pdf():
     return send_file(io.BytesIO(pdf_bytes), as_attachment=True, download_name=filename, mimetype=mimetype)
 
 
+@app.route("/debug-markers")
+def debug_markers():
+    """Simple debug endpoint to inspect marker availability on the server."""
+    out = []
+    out.append(f"Marker files on disk: {list(MARKER_IMAGES.keys())}")
+    out.append(f"Current workbook: {CURRENT_XLSX}")
+    try:
+        df = pd.read_excel(CURRENT_XLSX, nrows=50)
+        sources = df["Source"].dropna().unique()
+        for src in sources:
+            key = normalize_source_name(src)
+            has = key in MARKER_IMAGES
+            out.append(f"Source='{src}' -> key='{key}' -> marker_exists={has}")
+    except Exception as e:
+        out.append(f"Error reading workbook: {e}")
+    return "<br>".join(out)
+
+
 if __name__ == "__main__":
     app.run(debug=True)
