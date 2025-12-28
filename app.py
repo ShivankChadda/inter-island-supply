@@ -724,7 +724,8 @@ def home():
         .card-secondary.active { border:2px solid var(--primary); box-shadow: 0 10px 26px rgba(181,144,109,0.25); }
         .card h2 { margin-top:0; text-align:left; }
         label { display:block; margin-top:18px; margin-bottom:8px; font-weight:bold; text-align:left; }
-        input, select { padding:10px; width: 100%; font-size:18px; font-family: 'Bell MT','CMU Serif','Computer Modern',serif; text-align:left; border:1px solid var(--border); border-radius:8px; box-sizing:border-box; background:white; margin-bottom:16px; }
+        input[type="text"], select { padding:10px; width: 100%; font-size:18px; font-family: 'Bell MT','CMU Serif','Computer Modern',serif; text-align:left; border:1px solid var(--border); border-radius:8px; box-sizing:border-box; background:white; margin-bottom:16px; }
+        input[type="checkbox"] { width:auto; height:auto; margin:0; accent-color: var(--border); }
         .btn { margin-top:16px; padding:14px 18px; background:#9a7754; color:white; border:1px solid var(--border); cursor:pointer; font-size:18px; font-family: 'Bell MT','CMU Serif','Computer Modern',serif; border-radius:8px; width:100%; transition: all 0.15s ease; }
         .btn:hover { background:#826340; box-shadow: 0 6px 12px rgba(0,0,0,0.12); }
         .microcopy { font-size:13px; color:#444; margin-top:6px; text-align:left; }
