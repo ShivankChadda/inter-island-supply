@@ -780,9 +780,9 @@ def home():
                 <option value="purchase" {% if slip_type=='purchase' %}selected{% endif %}>Purchase slip (by Source)</option>
                 <option value="label" {% if slip_type=='label' %}selected{% endif %}>Labels (by Vendor)</option>
               </select>
-              <div style="display:flex; align-items:center; gap:8px; margin:12px 0 8px 0;">
+              <div style="display:flex; align-items:center; gap:8px; margin:10px 0 6px 0;">
                 <input type="checkbox" id="all_mode" name="all_mode" value="1" {% if request.form.get('all_mode') %}checked{% endif %} />
-                <label for="all_mode" style="margin:0; font-weight:normal;">Generate for all (no identifier needed)</label>
+                <label for="all_mode" style="margin:0; font-weight:normal; display:inline-block;">Generate for all (no identifier needed)</label>
               </div>
               <label for="identifier">Vendor name/code or Source</label>
               <input type="text" id="identifier" name="identifier" value="{{identifier}}" required placeholder="e.g., Prabhu, SKT C/BAY, or RSN" />
