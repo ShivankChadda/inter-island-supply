@@ -224,14 +224,18 @@ def build_table(matches: pd.DataFrame, meta: dict, slip_type: str) -> pd.DataFra
 def build_label_items(matches: pd.DataFrame, meta: dict) -> list[dict]:
     """Prepare aggregated item rows for labels."""
     # Similar to build_table but returns a simple list of dicts for PNG labels
-    items_df = matches[["Item_Name", meta["quantity_column"], "Unit"]].copy()
+    items_df = matches[["Item_Name", meta["quantity_column"], "Unit", "Source"]].copy()
     items_df.rename(columns={meta["quantity_column"]: "Quantity"}, inplace=True)
     items_df["Quantity"] = pd.to_numeric(items_df["Quantity"], errors="coerce")
     items_df = items_df.dropna(subset=["Item_Name"])
     items_df["Item_Name"] = items_df["Item_Name"].apply(normalize_item_name)
+    items_df["Source"] = items_df["Source"].apply(normalize_source_name)
 
     # aggregate to unique items (sum quantities per item/unit)
-    items_df = items_df.groupby(["Item_Name", "Unit"], as_index=False)["Quantity"].sum()
+    items_df = (
+        items_df.groupby(["Item_Name", "Unit", "Source"], as_index=False)["Quantity"]
+        .sum()
+    )
     items_df = items_df.sort_values("Item_Name")
     if items_df.empty:
         raise ValueError("No items found for labels")
@@ -243,6 +247,7 @@ def build_label_items(matches: pd.DataFrame, meta: dict) -> list[dict]:
                 "item": row["Item_Name"],
                 "quantity": row["Quantity"],
                 "unit": row["Unit"],
+                "source_key": row["Source"],
             }
         )
     return items
@@ -406,7 +411,7 @@ def make_label_zip(items: list[dict], meta: dict, identifier: str) -> tuple[byte
         box_x = width_px - border_margin - marker_offset - box_size
         box_y = height_px - border_margin - marker_offset - box_size
         draw.rectangle([box_x, box_y, box_x + box_size, box_y + box_size], outline="black", width=2)
-        source_key = normalize_source_name(meta.get("source", ""))
+        source_key = item.get("source_key") or normalize_source_name(meta.get("source", ""))
         marker_img = MARKER_IMAGES.get(source_key)
         if not marker_img:
             # fallback: substring match
