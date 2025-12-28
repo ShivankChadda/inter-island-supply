@@ -24,7 +24,7 @@ from reportlab.lib.styles import ParagraphStyle  # text styling in PDFs
 from reportlab.lib.units import cm, inch  # convenient unit conversions
 from reportlab.lib.utils import ImageReader  # (kept for table PDF path)
 from reportlab.pdfgen import canvas  # (kept for compatibility)
-from reportlab.platypus import Image, Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle  # PDF layout
+from reportlab.platypus import Image, Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle, PageBreak  # PDF layout
 
 app = Flask(__name__)
 
@@ -309,6 +309,56 @@ def make_pdf(table_df: pd.DataFrame, meta: dict, slip_type: str, identifier: str
     return buf.read(), filename
 
 
+def make_bulk_pdf(sections: list[tuple[str, pd.DataFrame, dict]], slip_type: str) -> tuple[bytes, str]:
+    """Generate a multi-section PDF (one per identifier)."""
+    buf = io.BytesIO()
+    doc = SimpleDocTemplate(buf, pagesize=A4, rightMargin=36, leftMargin=36, topMargin=36, bottomMargin=36)
+    story = []
+    for idx, (identifier, table_df, meta) in enumerate(sections):
+        data = table_df.copy()
+        data["Quantity"] = data["Quantity"].apply(format_qty)
+        table_data = data.values.tolist()
+
+        meta_style = ParagraphStyle(name="Meta", fontName="Times-Roman", fontSize=12, leading=15, spaceAfter=4)
+        story.append(Paragraph(f"<b>{slip_type.title()}</b>: {identifier}", meta_style))
+        for label, value in [
+            ("Date", date.today().strftime("%d %B %Y")),
+            ("Customer Name", meta.get("customer_name", "")),
+            ("Sailing Date", meta.get("sailing_date", "")),
+            ("Ship", meta.get("ship_name", "")),
+        ]:
+            story.append(Paragraph(f"<b>{label}</b>: {value}", meta_style))
+        story.append(Spacer(1, 12))
+
+        header_idx = 0
+        total_idx = len(data) - 1
+        table = Table(table_data, colWidths=[2.5 * cm, 6 * cm, 3 * cm, 2.5 * cm])
+        style = TableStyle(
+            [
+                ("FONTNAME", (0, 0), (-1, 0), "Times-Bold"),
+                ("ALIGN", (0, 0), (-1, 0), "CENTER"),
+                ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+                ("FONTNAME", (0, header_idx + 1), (-1, total_idx), "Times-Roman"),
+                ("ALIGN", (0, header_idx + 1), (0, total_idx), "CENTER"),
+                ("ALIGN", (1, header_idx + 1), (2, total_idx), "LEFT"),
+                ("ALIGN", (3, header_idx + 1), (3, total_idx), "CENTER"),
+                ("ITALIC", (3, header_idx + 1), (3, total_idx), True),
+                ("GRID", (0, 0), (-1, -1), 1, colors.black),
+            ]
+        )
+        style.add("BACKGROUND", (0, total_idx), (-1, total_idx), colors.HexColor("#e6f4e6"))
+        style.add("FONTNAME", (0, total_idx), (-1, total_idx), "Times-Bold")
+        table.setStyle(style)
+        story.append(table)
+        if idx < len(sections) - 1:
+            story.append(PageBreak())
+
+    doc.build(story)
+    buf.seek(0)
+    filename = f"{slip_type}_all.pdf"
+    return buf.read(), filename
+
+
 def make_label_zip(items: list[dict], meta: dict, identifier: str) -> tuple[bytes, str]:
     """Generate label images (PNG) and return a ZIP as bytes."""
     # Compute pixel dimensions from inches and DPI
@@ -577,21 +627,47 @@ def home():
                 else:
                     if slip_type not in {"order", "purchase", "invoice", "label"}:
                         raise ValueError("Slip type must be order, purchase, invoice, or label.")
-                    if not identifier:
-                        raise ValueError("Identifier is required.")
 
+                    all_mode = request.form.get("all_mode") == "1"
                     workbook_path = CURRENT_XLSX
                     raw_df = pd.read_excel(workbook_path)
-                    matches, meta = load_matches(raw_df, slip_type, identifier)
-                    LAST_PROCESSED_AT = datetime.now(LOCAL_TZ).strftime("%d %b %Y, %I:%M %p")
-                    if slip_type == "label":
-                        # Labels: show a simple preview list
-                        label_items = build_label_items(matches, meta)
-                        html_snippet = render_label_preview(label_items, meta)
+
+                    if all_mode:
+                        sections = []
+                        if slip_type in {"order", "invoice"}:
+                            # unique vendors by code/name
+                            vendors = raw_df[["Vendor_Code", "Vendor_Name"]].dropna(how="all").drop_duplicates()
+                            for _, row in vendors.iterrows():
+                                ident = row["Vendor_Code"] if pd.notna(row["Vendor_Code"]) else row["Vendor_Name"]
+                                if pd.isna(ident):
+                                    continue
+                                matches, meta = load_matches(raw_df, slip_type, str(ident))
+                                table_df = build_table(matches, meta, slip_type)
+                                sections.append((str(ident), table_df, meta))
+                        elif slip_type == "purchase":
+                            sources = raw_df["Source"].dropna().unique()
+                            for src in sources:
+                                matches, meta = load_matches(raw_df, slip_type, str(src))
+                                table_df = build_table(matches, meta, slip_type)
+                                sections.append((str(src), table_df, meta))
+                        LAST_PROCESSED_AT = datetime.now(LOCAL_TZ).strftime("%d %b %Y, %I:%M %p")
+                        html_snippet = f"Ready to download {len(sections)} slips."
+                        # store sections for PDF route via session? Instead recompute in pdf route.
+                        # here we just show preview text; pdf route will recompute.
+                        identifier = ""  # clear
                     else:
-                        # Slips: render HTML table preview
-                        table_df = build_table(matches, meta, slip_type)
-                        html_snippet = render_html(table_df, meta, slip_type, identifier)
+                        if not identifier:
+                            raise ValueError("Identifier is required.")
+                        matches, meta = load_matches(raw_df, slip_type, identifier)
+                        LAST_PROCESSED_AT = datetime.now(LOCAL_TZ).strftime("%d %b %Y, %I:%M %p")
+                        if slip_type == "label":
+                            # Labels: show a simple preview list
+                            label_items = build_label_items(matches, meta)
+                            html_snippet = render_label_preview(label_items, meta)
+                        else:
+                            # Slips: render HTML table preview
+                            table_df = build_table(matches, meta, slip_type)
+                            html_snippet = render_html(table_df, meta, slip_type, identifier)
             except Exception as exc:  # broad to show message to user
                 error = str(exc)
 
@@ -704,6 +780,7 @@ def home():
                 <option value="purchase" {% if slip_type=='purchase' %}selected{% endif %}>Purchase slip (by Source)</option>
                 <option value="label" {% if slip_type=='label' %}selected{% endif %}>Labels (by Vendor)</option>
               </select>
+              <label><input type="checkbox" id="all_mode" name="all_mode" value="1" {% if request.form.get('all_mode') %}checked{% endif %}> Generate for all (no identifier needed)</label>
               <label for="identifier">Vendor name/code or Source</label>
               <input type="text" id="identifier" name="identifier" value="{{identifier}}" required placeholder="e.g., Prabhu, SKT C/BAY, or RSN" />
               <label for="workbook">Upload your Master Roll</label>
@@ -736,7 +813,7 @@ def home():
               <div class="microcopy">Generates preview before download.</div>
               {% if uploaded_name %}<div style="margin-top:6px; color:#444; text-align:left;">Using uploaded file: {{uploaded_name}}</div>{% endif %}
             </form>
-            {% if error %}<div class="alert">Error: {{error}}<br/>Check spelling or confirm column values in Master Roll.</div>{% endif %}
+              {% if error %}<div class="alert">Error: {{error}}<br/>Check spelling or confirm column values in Master Roll.</div>{% endif %}
           </div>
           <div class="card preview-card {% if html_snippet %}card-secondary active{% else %}card-secondary{% endif %}">
             <h2>Preview & Download</h2>
@@ -746,6 +823,7 @@ def home():
                 <form action="/pdf" method="get" style="margin-top:12px;">
                   <input type="hidden" name="slip_type" value="{{slip_type}}">
                   <input type="hidden" name="identifier" value="{{identifier}}">
+                  {% if request.form.get('all_mode') %}<input type="hidden" name="all_mode" value="1">{% endif %}
                   <button class="btn" type="submit">
                     {% if slip_type=='label' %}Download Labels (ZIP){% else %}Download PDF{% endif %}
                   </button>
@@ -765,6 +843,7 @@ def home():
         const replaceBtn = document.getElementById('replace-btn');
         const slipSelect = document.getElementById('slip_type');
         const identifierInput = document.getElementById('identifier');
+        const allMode = document.getElementById('all_mode');
 
         function triggerUpload(files) {
           if (!files || !files.length) return;
@@ -774,6 +853,20 @@ def home():
           if (identifierInput) identifierInput.removeAttribute('required');
           if (uploadOnly) uploadOnly.value = "1";
           fileInput.form.submit();
+        }
+
+        function toggleIdentifierRequired() {
+          const isAll = allMode && allMode.checked;
+          if (isAll) {
+            identifierInput.removeAttribute('required');
+          } else {
+            identifierInput.setAttribute('required', 'required');
+          }
+        }
+
+        if (allMode) {
+          allMode.addEventListener('change', toggleIdentifierRequired);
+          toggleIdentifierRequired();
         }
 
         if (dropZone) {
@@ -823,21 +916,45 @@ def home():
 def pdf():
     slip_type = request.args.get("slip_type", "").strip().lower()
     identifier = request.args.get("identifier", "").strip()
-    if slip_type not in {"order", "purchase", "invoice", "label"} or not identifier:
+    all_mode = request.args.get("all_mode") == "1"
+    if slip_type not in {"order", "purchase", "invoice", "label"} or (not identifier and not all_mode):
         return "Missing or invalid parameters", 400
     try:
         # Use current workbook (uploaded or default)
         workbook_path = CURRENT_XLSX
         raw_df = pd.read_excel(workbook_path)
-        matches, meta = load_matches(raw_df, slip_type, identifier)
-        if slip_type == "label":
-            # Labels -> ZIP of PNGs
-            label_items = build_label_items(matches, meta)
-            pdf_bytes, filename = make_label_zip(label_items, meta, identifier)
+        if all_mode:
+            sections = []
+            if slip_type in {"order", "invoice"}:
+                vendors = raw_df[["Vendor_Code", "Vendor_Name"]].dropna(how="all").drop_duplicates()
+                for _, row in vendors.iterrows():
+                    ident = row["Vendor_Code"] if pd.notna(row["Vendor_Code"]) else row["Vendor_Name"]
+                    if pd.isna(ident):
+                        continue
+                    matches, meta = load_matches(raw_df, slip_type, str(ident))
+                    table_df = build_table(matches, meta, slip_type)
+                    sections.append((str(ident), table_df, meta))
+            elif slip_type == "purchase":
+                sources = raw_df["Source"].dropna().unique()
+                for src in sources:
+                    matches, meta = load_matches(raw_df, slip_type, str(src))
+                    table_df = build_table(matches, meta, slip_type)
+                    sections.append((str(src), table_df, meta))
+            else:
+                return "Labels do not support all-mode", 400
+            if not sections:
+                return "No slips found", 400
+            pdf_bytes, filename = make_bulk_pdf(sections, slip_type)
         else:
-            # All other slips -> PDF
-            table_df = build_table(matches, meta, slip_type)
-            pdf_bytes, filename = make_pdf(table_df, meta, slip_type, identifier)
+            matches, meta = load_matches(raw_df, slip_type, identifier)
+            if slip_type == "label":
+                # Labels -> ZIP of PNGs
+                label_items = build_label_items(matches, meta)
+                pdf_bytes, filename = make_label_zip(label_items, meta, identifier)
+            else:
+                # All other slips -> PDF
+                table_df = build_table(matches, meta, slip_type)
+                pdf_bytes, filename = make_pdf(table_df, meta, slip_type, identifier)
     except Exception as exc:
         return f"Error: {exc}", 400
     mimetype = "application/zip" if slip_type == "label" else "application/pdf"
