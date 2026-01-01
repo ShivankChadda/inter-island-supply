@@ -39,6 +39,7 @@ LOCAL_TZ = ZoneInfo("Asia/Kolkata")  # adjust to your local timezone
 LOGO_PATH = "Farmers_Wordmark_Badge_Transparent_1_3000px.png"
 CLIPART_PATH = "Excel clipart.png"
 MARKER_DIR = "Marker box"
+TEMPLATE_PATH = "Master Roll Template.xlsx"
 LABEL_WIDTH_IN = 5  # label width in inches (landscape 5x3)
 LABEL_HEIGHT_IN = 3  # label height in inches
 LABEL_DPI = 300  # DPI for high-quality PNG output
@@ -768,6 +769,11 @@ def home():
             <div>Today: {{ today_str }}</div>
           </div>
         </div>
+        <div style="margin: 8px 0 12px 0; display:flex; justify-content:flex-end;">
+          <a href="/download-template" style="text-decoration:none;">
+            <button class="btn" type="button" style="width:auto; padding:10px 14px;">Download Master Roll Template</button>
+          </a>
+        </div>
         <div class="grid">
           <div class="card card-primary">
             <h2>Slip Generator</h2>
@@ -981,6 +987,16 @@ def debug_markers():
     except Exception as e:
         out.append(f"Error reading workbook: {e}")
     return "<br>".join(out)
+
+
+@app.route("/download-template")
+def download_template():
+    """Download the Master Roll template with a dated filename."""
+    if not os.path.exists(TEMPLATE_PATH):
+        return "Template not found on server", 404
+    dated = datetime.now(LOCAL_TZ).strftime("%Y-%m-%d")
+    filename = f"Master_Roll_{dated}.xlsx"
+    return send_file(TEMPLATE_PATH, as_attachment=True, download_name=filename, mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
 
 
 if __name__ == "__main__":
