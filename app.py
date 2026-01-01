@@ -34,6 +34,7 @@ DEFAULT_XLSX = "Master Roll.xlsx"
 CURRENT_XLSX = DEFAULT_XLSX
 LAST_PROCESSED_AT = None  # track last processed timestamp for UI (localized)
 LOCAL_TZ = ZoneInfo("Asia/Kolkata")  # adjust to your local timezone
+DELIVERY_CACHE = {"pdf": None, "filename": None}  # simple cache for delivery slip PDF
 
 # Branding asset and label sizing in inches / pixels
 LOGO_PATH = "Farmers_Wordmark_Badge_Transparent_1_3000px.png"
@@ -502,6 +503,68 @@ def make_label_zip(items: list[dict], meta: dict, identifier: str) -> tuple[byte
     return zip_buf.read(), filename
 
 
+def make_delivery_pdf(vendor: str, packages: int | None, trays: int | None, boxes: int | None, images: list[tuple[str, bytes]]) -> tuple[bytes, str]:
+    """Generate a delivery slip PDF with header and 3x3 image grid."""
+    buf = io.BytesIO()
+    doc = SimpleDocTemplate(buf, pagesize=A4, rightMargin=36, leftMargin=36, topMargin=36, bottomMargin=36)
+    story = []
+
+    # Header block
+    meta_style = ParagraphStyle(name="Meta", fontName="Times-Roman", fontSize=12, leading=15, spaceAfter=4)
+    story.append(Paragraph(f"<b>Vendor Name</b>: {vendor}", meta_style))
+    if packages not in (None, 0):
+        story.append(Paragraph(f"<b>Number of Packages</b>: {packages}", meta_style))
+    if trays not in (None, 0):
+        story.append(Paragraph(f"<b>Number of Trays</b>: {trays}", meta_style))
+    if boxes not in (None, 0):
+        story.append(Paragraph(f"<b>Number of Boxes</b>: {boxes}", meta_style))
+    story.append(Spacer(1, 12))
+
+    # Images grid 3x3 per page
+    cell_w = (A4[0] - 72) / 3  # approx, considering margins
+    cell_h = (A4[1] - 180) / 3
+
+    def img_flowable(name, data, idx):
+        img = PILImage.open(io.BytesIO(data))
+        iw, ih = img.size
+        scale = min(cell_w / iw, cell_h / ih)
+        new_size = (int(iw * scale), int(ih * scale))
+        bio = io.BytesIO()
+        img.resize(new_size, PILImage.LANCZOS).save(bio, format="PNG")
+        bio.seek(0)
+        caption = Paragraph(f"{idx+1}. {name}", ParagraphStyle(name="Cap", fontSize=10, leading=12))
+        return [Image(bio, width=new_size[0], height=new_size[1]), caption]
+
+    blocks = []
+    for idx, (name, data) in enumerate(images):
+        blocks.append(img_flowable(name, data, idx))
+
+    # assemble 3x3 grid; each cell is a flowable list (image+caption)
+    rows = []
+    for i in range(0, len(blocks), 3):
+        row = []
+        for cell in blocks[i:i+3]:
+            row.append(cell)
+        while len(row) < 3:
+            row.append("")
+        rows.append(row)
+        if len(rows) == 3:
+            table = Table(rows, colWidths=[cell_w]*3)
+            table.setStyle(TableStyle([("VALIGN", (0,0), (-1,-1), "TOP"), ("ALIGN",(0,0),(-1,-1),"CENTER")]))
+            story.append(table)
+            story.append(PageBreak())
+            rows = []
+    if rows:
+        table = Table(rows, colWidths=[cell_w]*3)
+        table.setStyle(TableStyle([("VALIGN", (0,0), (-1,-1), "TOP"), ("ALIGN",(0,0),(-1,-1),"CENTER")]))
+        story.append(table)
+
+    doc.build(story)
+    buf.seek(0)
+    safe_vendor = re.sub(r"[^a-z0-9]+", "_", vendor.lower()).strip("_") or "vendor"
+    filename = f"delivery_{safe_vendor}.pdf"
+    return buf.read(), filename
+
 def render_html(table_df: pd.DataFrame, meta: dict, slip_type: str, identifier: str) -> str:
     """Build a simple HTML view of the slip."""
     df = table_df.copy()
@@ -575,102 +638,147 @@ def render_label_preview(items: list[dict], meta: dict) -> str:
 def home():
     global CURRENT_XLSX
     global LAST_PROCESSED_AT
+    global DELIVERY_CACHE
     error = None
     html_snippet = None
+    delivery_snippet = None
     slip_type = ""
     identifier = ""
     uploaded_name = None
     upload_only = False
     file_rows = None
     file_cols = []
+    mode = request.args.get("mode") or request.form.get("mode") or "dispatch"
 
     if request.method == "POST":
-        # Allow resetting the file without needing other inputs
-        if request.form.get("reset_file") == "1":
-            CURRENT_XLSX = DEFAULT_XLSX
-            uploaded_name = None
-            slip_type = ""
-            identifier = ""
-            LAST_PROCESSED_AT = None
-        else:
-            # Read form inputs
-            slip_type = request.form.get("slip_type", "").strip().lower()
-            identifier = request.form.get("identifier", "").strip()
-            upload = request.files.get("workbook")
-            upload_only = request.form.get("upload_only") == "1"
+        if mode == "delivery":
+            vendor_name = request.form.get("delivery_vendor", "").strip()
+            pkg_raw = request.form.get("delivery_packages", "").strip()
+            tray_raw = request.form.get("delivery_trays", "").strip()
+            box_raw = request.form.get("delivery_boxes", "").strip()
+            photos = request.files.getlist("photos")
+            def parse_int_field(val):
+                if val == "" or val is None:
+                    return None
+                try:
+                    num = int(val)
+                    if num < 0:
+                        raise ValueError
+                    return num
+                except Exception:
+                    raise ValueError("must be a non-negative integer or blank")
             try:
-                # Process upload first (always)
-                if upload and upload.filename:
-                    safe_name = re.sub(r"[^A-Za-z0-9._-]+", "_", upload.filename) or "uploaded.xlsx"
-                    tmp_path = f"/tmp/{safe_name}"
-                    upload.save(tmp_path)
-                    CURRENT_XLSX = tmp_path
-                    uploaded_name = upload.filename
-                    LAST_PROCESSED_AT = datetime.now(LOCAL_TZ).strftime("%d %b %Y, %I:%M %p")
-                if CURRENT_XLSX == DEFAULT_XLSX and not upload:
-                    raise ValueError("Please upload the Master Roll (.xlsx) to continue.")
-
-                # If upload-only, stop after updating file state
-                if upload_only:
-                    raw_df = pd.read_excel(CURRENT_XLSX, nrows=5000)
-                    file_rows = len(raw_df)
-                    key_cols = [
-                        "Vendor_Name",
-                        "Vendor_Code",
-                        "Source",
-                        "Item_Name",
-                        "Quantity",
-                        "Packed_Quantity",
-                        "Ship_Name",
-                        "Sailing_Date",
-                    ]
-                    file_cols = [c for c in key_cols if c in raw_df.columns]
-                else:
-                    if slip_type not in {"order", "purchase", "invoice", "label"}:
-                        raise ValueError("Slip type must be order, purchase, invoice, or label.")
-
-                    all_mode = request.form.get("all_mode") == "1"
-                    workbook_path = CURRENT_XLSX
-                    raw_df = pd.read_excel(workbook_path)
-
-                    if all_mode:
-                        sections = []
-                        if slip_type in {"order", "invoice"}:
-                            # unique vendors by code/name
-                            vendors = raw_df[["Vendor_Code", "Vendor_Name"]].dropna(how="all").drop_duplicates()
-                            for _, row in vendors.iterrows():
-                                ident = row["Vendor_Code"] if pd.notna(row["Vendor_Code"]) else row["Vendor_Name"]
-                                if pd.isna(ident):
-                                    continue
-                                matches, meta = load_matches(raw_df, slip_type, str(ident))
-                                table_df = build_table(matches, meta, slip_type)
-                                sections.append((str(ident), table_df, meta))
-                        elif slip_type == "purchase":
-                            sources = raw_df["Source"].dropna().unique()
-                            for src in sources:
-                                matches, meta = load_matches(raw_df, slip_type, str(src))
-                                table_df = build_table(matches, meta, slip_type)
-                                sections.append((str(src), table_df, meta))
-                        LAST_PROCESSED_AT = datetime.now(LOCAL_TZ).strftime("%d %b %Y, %I:%M %p")
-                        html_snippet = f"Ready to download {len(sections)} slips."
-                        # store sections for PDF route via session? Instead recompute in pdf route.
-                        # here we just show preview text; pdf route will recompute.
-                        identifier = ""  # clear
-                    else:
-                        if not identifier:
-                            raise ValueError("Identifier is required.")
-                        matches, meta = load_matches(raw_df, slip_type, identifier)
-                        LAST_PROCESSED_AT = datetime.now(LOCAL_TZ).strftime("%d %b %Y, %I:%M %p")
-                        if slip_type == "label":
-                            # Labels: show a simple preview list
-                            label_items = build_label_items(matches, meta)
-                            html_snippet = render_label_preview(label_items, meta)
-                        else:
-                            # Slips: render HTML table preview
-                            table_df = build_table(matches, meta, slip_type)
-                            html_snippet = render_html(table_df, meta, slip_type, identifier)
-            except Exception as exc:  # broad to show message to user
+                if not vendor_name:
+                    raise ValueError("Vendor Name is required.")
+                try:
+                    packages = parse_int_field(pkg_raw)
+                    trays = parse_int_field(tray_raw)
+                    boxes = parse_int_field(box_raw)
+                except ValueError as ve:
+                    raise ValueError(f"Package/Tray/Box {ve}")
+                images = []
+                for f in photos:
+                    if not f or not f.filename:
+                        continue
+                    name = f.filename
+                    ext = os.path.splitext(name)[1].lower()
+                    if ext not in {".png", ".jpg", ".jpeg"}:
+                        raise ValueError(f"Unsupported file type: {ext}")
+                    data = f.read()
+                    images.append((name, data))
+                if not images:
+                    raise ValueError("Please upload photos for the delivery slip.")
+                images.sort(key=lambda t: t[0].lower())
+                pdf_bytes, filename = make_delivery_pdf(vendor_name, packages, trays, boxes, images)
+                DELIVERY_CACHE = {"pdf": pdf_bytes, "filename": filename}
+                delivery_snippet = f"Delivery slip ready for {vendor_name}. Photos: {len(images)}"
+            except Exception as exc:
                 error = str(exc)
+        else:
+            # Allow resetting the file without needing other inputs
+            if request.form.get("reset_file") == "1":
+                CURRENT_XLSX = DEFAULT_XLSX
+                uploaded_name = None
+                slip_type = ""
+                identifier = ""
+                LAST_PROCESSED_AT = None
+            else:
+                # Read form inputs
+                slip_type = request.form.get("slip_type", "").strip().lower()
+                identifier = request.form.get("identifier", "").strip()
+                upload = request.files.get("workbook")
+                upload_only = request.form.get("upload_only") == "1"
+                try:
+                    # Process upload first (always)
+                    if upload and upload.filename:
+                        safe_name = re.sub(r"[^A-Za-z0-9._-]+", "_", upload.filename) or "uploaded.xlsx"
+                        tmp_path = f"/tmp/{safe_name}"
+                        upload.save(tmp_path)
+                        CURRENT_XLSX = tmp_path
+                        uploaded_name = upload.filename
+                        LAST_PROCESSED_AT = datetime.now(LOCAL_TZ).strftime("%d %b %Y, %I:%M %p")
+                    if CURRENT_XLSX == DEFAULT_XLSX and not upload:
+                        raise ValueError("Please upload the Master Roll (.xlsx) to continue.")
+
+                    # If upload-only, stop after updating file state
+                    if upload_only:
+                        raw_df = pd.read_excel(CURRENT_XLSX, nrows=5000)
+                        file_rows = len(raw_df)
+                        key_cols = [
+                            "Vendor_Name",
+                            "Vendor_Code",
+                            "Source",
+                            "Item_Name",
+                            "Quantity",
+                            "Packed_Quantity",
+                            "Ship_Name",
+                            "Sailing_Date",
+                        ]
+                        file_cols = [c for c in key_cols if c in raw_df.columns]
+                    else:
+                        if slip_type not in {"order", "purchase", "invoice", "label"}:
+                            raise ValueError("Slip type must be order, purchase, invoice, or label.")
+
+                        all_mode = request.form.get("all_mode") == "1"
+                        workbook_path = CURRENT_XLSX
+                        raw_df = pd.read_excel(workbook_path)
+
+                        if all_mode:
+                            sections = []
+                            if slip_type in {"order", "invoice"}:
+                                # unique vendors by code/name
+                                vendors = raw_df[["Vendor_Code", "Vendor_Name"]].dropna(how="all").drop_duplicates()
+                                for _, row in vendors.iterrows():
+                                    ident = row["Vendor_Code"] if pd.notna(row["Vendor_Code"]) else row["Vendor_Name"]
+                                    if pd.isna(ident):
+                                        continue
+                                    matches, meta = load_matches(raw_df, slip_type, str(ident))
+                                    table_df = build_table(matches, meta, slip_type)
+                                    sections.append((str(ident), table_df, meta))
+                            elif slip_type == "purchase":
+                                sources = raw_df["Source"].dropna().unique()
+                                for src in sources:
+                                    matches, meta = load_matches(raw_df, slip_type, str(src))
+                                    table_df = build_table(matches, meta, slip_type)
+                                    sections.append((str(src), table_df, meta))
+                            LAST_PROCESSED_AT = datetime.now(LOCAL_TZ).strftime("%d %b %Y, %I:%M %p")
+                            html_snippet = f"Ready to download {len(sections)} slips."
+                            identifier = ""  # clear
+                        else:
+                            if not identifier:
+                                raise ValueError("Identifier is required.")
+                            matches, meta = load_matches(raw_df, slip_type, identifier)
+                            LAST_PROCESSED_AT = datetime.now(LOCAL_TZ).strftime("%d %b %Y, %I:%M %p")
+                            if slip_type == "label":
+                                # Labels: show a simple preview list
+                                label_items = build_label_items(matches, meta)
+                                html_snippet = render_label_preview(label_items, meta)
+                            else:
+                                # Slips: render HTML table preview
+                                table_df = build_table(matches, meta, slip_type)
+                                html_snippet = render_html(table_df, meta, slip_type, identifier)
+                except Exception as exc:  # broad to show message to user
+                    error = str(exc)
 
     # status info for header
     file_display = uploaded_name or os.path.basename(CURRENT_XLSX)
@@ -753,6 +861,9 @@ def home():
         .file-actions button.primary { background:#fff; }
         .file-actions button:hover { background:#e6d7c0; }
         footer { margin-top:18px; text-align:center; font-size:14px; color:#444; }
+        .nav-row { display:flex; gap:8px; margin:8px 0 12px 0; }
+        .nav-btn { padding:10px 14px; border:1px solid var(--border); border-radius:10px; background:#fff; cursor:pointer; font-size:16px; text-decoration:none; color:var(--border); }
+        .nav-btn.active { background:var(--primary); color:#fff; }
       </style>
     </head>
     <body>
@@ -769,15 +880,60 @@ def home():
             <div>Today: {{ today_str }}</div>
           </div>
         </div>
+        <div class="nav-row">
+          <a class="nav-btn {% if mode=='dispatch' %}active{% endif %}" href="/?mode=dispatch">Dispatch Desk</a>
+          <a class="nav-btn {% if mode=='delivery' %}active{% endif %}" href="/?mode=delivery">Delivery Slip</a>
+        </div>
         <div style="margin: 8px 0 12px 0; display:flex; justify-content:flex-end;">
           <a href="/download-template" style="text-decoration:none;">
             <button class="btn" type="button" style="width:auto; padding:10px 14px;">Download Master Roll Template</button>
           </a>
         </div>
         <div class="grid">
+          {% if mode == 'delivery' %}
+          <div class="card card-primary">
+            <h2>Delivery Slip Generator</h2>
+            <form method="post" enctype="multipart/form-data">
+              <input type="hidden" name="mode" value="delivery" />
+              <label for="delivery_vendor">Vendor Name *</label>
+              <input type="text" id="delivery_vendor" name="delivery_vendor" required placeholder="e.g., Anand" />
+              <label for="delivery_packages">Number of Packages (optional)</label>
+              <input type="number" id="delivery_packages" name="delivery_packages" min="0" placeholder="Leave blank if not provided" />
+              <label for="delivery_trays">Number of Trays (optional)</label>
+              <input type="number" id="delivery_trays" name="delivery_trays" min="0" placeholder="Leave blank if not provided" />
+              <label for="delivery_boxes">Number of Boxes (optional)</label>
+              <input type="number" id="delivery_boxes" name="delivery_boxes" min="0" placeholder="Leave blank if not provided" />
+              <div class="microcopy">0 will be omitted from slip.</div>
+              <label for="photos">Upload photos (folder or select multiple)</label>
+              <div id="drop-zone" class="dropzone">
+                <div class="dz-title">Drop photos here</div>
+                <div class="dz-sub">or click to browse (PNG, JPG, JPEG)</div>
+                <div class="dz-hint">You can select multiple files</div>
+                <input type="file" id="photos" name="photos" accept="image/png,image/jpeg" multiple />
+              </div>
+              <button class="btn" type="submit">Generate</button>
+              <div class="microcopy">Generates preview before download.</div>
+            </form>
+              {% if error %}<div class="alert">Error: {{error}}</div>{% endif %}
+          </div>
+          <div class="card preview-card {% if delivery_snippet %}card-secondary active{% else %}card-secondary{% endif %}">
+            <h2>Preview & Download</h2>
+            {% if delivery_snippet %}
+              <div class="result">
+                {{ delivery_snippet }}
+                <form action="/delivery-pdf" method="get" style="margin-top:12px;">
+                  <button class="btn" type="submit">Download PDF</button>
+                </form>
+              </div>
+            {% else %}
+              <p style="color:#666;">Generate a delivery slip to see the preview here.</p>
+            {% endif %}
+          </div>
+          {% else %}
           <div class="card card-primary">
             <h2>Slip Generator</h2>
             <form method="post" enctype="multipart/form-data">
+              <input type="hidden" name="mode" value="dispatch" />
               <input type="hidden" name="upload_only" id="upload_only" value="">
               <label for="slip_type">Slip type</label>
               <select name="slip_type" id="slip_type" required>
@@ -843,12 +999,13 @@ def home():
               <p style="color:#666;">Generate a slip to see the preview here.</p>
             {% endif %}
           </div>
+          {% endif %}
         </div>
         <footer>designed by Shivank Chadda • Internal tool • FGN Operations • v1.0</footer>
       </div>
       <script>
         const dropZone = document.getElementById('drop-zone');
-        const fileInput = document.getElementById('workbook');
+        const fileInput = document.getElementById('workbook') || document.getElementById('photos');
         const uploadOnly = document.getElementById('upload_only');
         const replaceBtn = document.getElementById('replace-btn');
         const slipSelect = document.getElementById('slip_type');
@@ -858,11 +1015,13 @@ def home():
         function triggerUpload(files) {
           if (!files || !files.length) return;
           fileInput.files = files;
-          // allow submission without slip/identifier for upload-only
-          if (slipSelect) slipSelect.removeAttribute('required');
-          if (identifierInput) identifierInput.removeAttribute('required');
-          if (uploadOnly) uploadOnly.value = "1";
-          fileInput.form.submit();
+          // allow submission without slip/identifier for upload-only (dispatch)
+          if (uploadOnly) {
+            if (slipSelect) slipSelect.removeAttribute('required');
+            if (identifierInput) identifierInput.removeAttribute('required');
+            uploadOnly.value = "1";
+            fileInput.form.submit();
+          }
         }
 
         function toggleIdentifierRequired() {
@@ -907,6 +1066,7 @@ def home():
         template,
         error=error,
         html_snippet=html_snippet,
+        delivery_snippet=delivery_snippet,
         slip_type=slip_type,
         identifier=identifier,
         clipart_data=CLIPART_DATA_URI,
@@ -919,6 +1079,7 @@ def home():
         has_custom_file=(CURRENT_XLSX != DEFAULT_XLSX),
         file_modified=file_modified,
         last_processed=last_processed,
+        mode=mode,
     )
 
 
@@ -997,6 +1158,18 @@ def download_template():
     dated = datetime.now(LOCAL_TZ).strftime("%Y-%m-%d")
     filename = f"Master_Roll_{dated}.xlsx"
     return send_file(TEMPLATE_PATH, as_attachment=True, download_name=filename, mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+
+
+@app.route("/delivery-pdf")
+def delivery_pdf():
+    if not DELIVERY_CACHE.get("pdf"):
+        return "No delivery slip generated yet", 400
+    return send_file(
+        io.BytesIO(DELIVERY_CACHE["pdf"]),
+        as_attachment=True,
+        download_name=DELIVERY_CACHE.get("filename", "delivery.pdf"),
+        mimetype="application/pdf",
+    )
 
 
 if __name__ == "__main__":
