@@ -562,74 +562,107 @@ def make_delivery_pdf(meta: dict, images: list[tuple[str, bytes]]) -> tuple[byte
     else:
         sailing_date = str(sailing_raw)
     packages = meta.get("packages") or 0
-    trays = meta.get("trays") or 0
-    boxes = meta.get("boxes") or 0
 
-    # Header band
-    header_bg = colors.HexColor("#f6f3ed")
-    title_style = ParagraphStyle(name="Title", fontName="Times-Roman", fontSize=12, leading=14, textColor=colors.HexColor("#4a433b"))
-    vendor_style = ParagraphStyle(name="Vendor", fontName="Times-Bold", fontSize=24, leading=28, textColor=colors.HexColor("#2f2a24"))
-    meta_style = ParagraphStyle(name="MetaSmall", fontName="Times-Roman", fontSize=11, leading=13, textColor=colors.HexColor("#5a544d"))
+    # Typography hierarchy (Bell MT intent; Times used as fallback)
+    company_name_style = ParagraphStyle(name="CompanyName", fontName="Times-Bold", fontSize=12, leading=14, alignment=2, textColor=colors.HexColor("#2f2a24"))
+    company_meta_style = ParagraphStyle(name="CompanyMeta", fontName="Times-Roman", fontSize=10, leading=12, alignment=2, textColor=colors.HexColor("#4a433b"))
+    title_style = ParagraphStyle(name="Title", fontName="Times-Roman", fontSize=12, leading=14, alignment=1, textColor=colors.HexColor("#2f2a24"))
+    party_label_style = ParagraphStyle(name="PartyLbl", fontName="Times-Roman", fontSize=10, leading=12, textColor=colors.HexColor("#5a544d"))
+    party_value_style = ParagraphStyle(name="PartyVal", fontName="Times-Bold", fontSize=20, leading=22, textColor=colors.HexColor("#2f2a24"))
+    meta_label_style = ParagraphStyle(name="MetaLbl", fontName="Times-Roman", fontSize=10, leading=12, textColor=colors.HexColor("#5a544d"), alignment=0)
+    meta_value_style = ParagraphStyle(name="MetaVal", fontName="Times-Roman", fontSize=12, leading=14, textColor=colors.HexColor("#2f2a24"), alignment=0)
 
-    header_rows = []
-    # logo
+    # Header row: logo left, company details right (right-aligned)
     logo_flow = ""
     try:
-        logo = Image(LOGO_PATH, width=150, height=60)
+        logo = Image(LOGO_PATH, width=120, height=70)
         logo_flow = logo
     except Exception:
         pass
-    header_rows.append([logo_flow])
-    header_rows.append([Paragraph("Delivery Slip", title_style)])
-    header_rows.append([Paragraph(vendor, vendor_style)])
-    header_rows.append([Paragraph(f"Location: {meta.get('vendor_location','')}", meta_style)])
-    header_rows.append([Paragraph(f"Ship: {ship_name}", meta_style)])
-    header_rows.append([Paragraph(f"Sailing Date: {sailing_date}", meta_style)])
-    header = Table(header_rows, colWidths=[doc.width])
-    header.setStyle(TableStyle([
-        ("BACKGROUND", (0,0), (-1,-1), header_bg),
-        ("LEFTPADDING", (0,0), (-1,-1), 10),
-        ("RIGHTPADDING", (0,0), (-1,-1), 10),
-        ("TOPPADDING", (0,0), (-1,-1), 6),
-        ("BOTTOMPADDING", (0,0), (-1,-1), 10),
-        ("ALIGN", (0,0), (-1,-1), "LEFT"),
+    company_lines = [
+        Paragraph("The Farmers of Great Nicobar Private Limited", company_name_style),
+        Paragraph("Survey number 102, Taylorabad", company_meta_style),
+        Paragraph("Sri Vijaya Puram Andaman and Nicobar Islands 744105", company_meta_style),
+        Paragraph("India", company_meta_style),
+        Paragraph("GSTIN 35AAMCT2062L1Z1", company_meta_style),
+        Paragraph("8016919182", company_meta_style),
+        Paragraph("chaddashivank@gmail.com", company_meta_style),
+    ]
+    company_stack = Table([[p] for p in company_lines], colWidths=[doc.width * 0.6])
+    company_stack.setStyle(TableStyle([
+        ("ALIGN", (0,0), (-1,-1), "RIGHT"),
+        ("VALIGN", (0,0), (-1,-1), "TOP"),
+        ("LEFTPADDING", (0,0), (-1,-1), 0),
+        ("RIGHTPADDING", (0,0), (-1,-1), 0),
+        ("TOPPADDING", (0,0), (-1,-1), 0),
+        ("BOTTOMPADDING", (0,0), (-1,-1), 0),
     ]))
-    story.append(header)
-    story.append(Spacer(1, 14))
+    header_table = Table([[logo_flow, company_stack]], colWidths=[doc.width * 0.4, doc.width * 0.6])
+    header_table.setStyle(TableStyle([
+        ("VALIGN", (0,0), (-1,-1), "TOP"),
+        ("ALIGN", (0,0), (0,0), "LEFT"),
+        ("ALIGN", (1,0), (1,0), "RIGHT"),
+        ("LEFTPADDING", (0,0), (-1,-1), 0),
+        ("RIGHTPADDING", (0,0), (-1,-1), 0),
+        ("TOPPADDING", (0,0), (-1,-1), 0),
+        ("BOTTOMPADDING", (0,0), (-1,-1), 6),
+    ]))
+    story.append(header_table)
+    story.append(Spacer(1, 6))
 
-    # Summary boxes
-    summary_items = []
-    if packages > 0:
-        summary_items.append(("Packages", packages))
-    if trays > 0:
-        summary_items.append(("Trays", trays))
-    if boxes > 0:
-        summary_items.append(("Boxes", boxes))
-    if summary_items:
-        cols = len(summary_items)
-        col_widths = [doc.width / cols] * cols
-        data = []
-        row = []
-        for label, val in summary_items:
-            row.append([
-                Paragraph(str(val), ParagraphStyle(name="Num", fontName="Times-Bold", fontSize=16, alignment=1)),
-                Paragraph(label, ParagraphStyle(name="Lbl", fontName="Times-Roman", fontSize=11, textColor=colors.HexColor("#5a544d"), alignment=1))
-            ])
-        data.append(row)
-        table = Table(data, colWidths=col_widths)
-        table.setStyle(TableStyle([
-            ("VALIGN", (0,0), (-1,-1), "MIDDLE"),
-            ("ALIGN", (0,0), (-1,-1), "CENTER"),
-            ("INNERGRID", (0,0), (-1,-1), 0.5, colors.HexColor("#d1c6b8")),
-            ("BOX", (0,0), (-1,-1), 0.5, colors.HexColor("#d1c6b8")),
-            ("BACKGROUND", (0,0), (-1,-1), colors.HexColor("#fbf9f6")),
-            ("TOPPADDING", (0,0), (-1,-1), 8),
-            ("BOTTOMPADDING", (0,0), (-1,-1), 8),
-        ]))
-        story.append(table)
-        story.append(Spacer(1, 14))
+    # Centered dashed divider with title
+    divider = Table(
+        [[Paragraph("", company_meta_style), Paragraph("DELIVERY SLIP", title_style), Paragraph("", company_meta_style)]],
+        colWidths=[doc.width * 0.33, doc.width * 0.34, doc.width * 0.33],
+    )
+    divider.setStyle(TableStyle([
+        ("LINEBELOW", (0,0), (-1,0), 0.8, colors.black, (2,2)),
+        ("ALIGN", (1,0), (1,0), "CENTER"),
+        ("VALIGN", (0,0), (-1,-1), "MIDDLE"),
+        ("TOPPADDING", (0,0), (-1,-1), 4),
+        ("BOTTOMPADDING", (0,0), (-1,-1), 8),
+    ]))
+    story.append(divider)
 
-    # Divider
+    # Two-column info row: Party on left, ship/date/packages on right
+    left_block = Table([
+        [Paragraph("Party Name:", party_label_style)],
+        [Paragraph(vendor, party_value_style)],
+    ], colWidths=[doc.width * 0.5])
+    left_block.setStyle(TableStyle([
+        ("LEFTPADDING", (0,0), (-1,-1), 0),
+        ("RIGHTPADDING", (0,0), (-1,-1), 12),
+        ("TOPPADDING", (0,0), (-1,-1), 0),
+        ("BOTTOMPADDING", (0,0), (-1,-1), 0),
+    ]))
+
+    meta_rows = [
+        [Paragraph("Ship Name", meta_label_style), Paragraph(ship_name, meta_value_style)],
+        [Paragraph("Sailing Date", meta_label_style), Paragraph(sailing_date, meta_value_style)],
+        [Paragraph("Total Packages", meta_label_style), Paragraph(str(packages), meta_value_style)],
+    ]
+    right_block = Table(meta_rows, colWidths=[doc.width * 0.18, doc.width * 0.22])
+    right_block.setStyle(TableStyle([
+        ("ALIGN", (0,0), (-1,-1), "LEFT"),
+        ("VALIGN", (0,0), (-1,-1), "MIDDLE"),
+        ("LEFTPADDING", (0,0), (-1,-1), 6),
+        ("RIGHTPADDING", (0,0), (-1,-1), 0),
+        ("TOPPADDING", (0,0), (-1,-1), 1),
+        ("BOTTOMPADDING", (0,0), (-1,-1), 1),
+    ]))
+
+    info_table = Table([[left_block, right_block]], colWidths=[doc.width * 0.55, doc.width * 0.45])
+    info_table.setStyle(TableStyle([
+        ("VALIGN", (0,0), (-1,-1), "TOP"),
+        ("LEFTPADDING", (0,0), (-1,-1), 0),
+        ("RIGHTPADDING", (0,0), (-1,-1), 0),
+        ("TOPPADDING", (0,0), (-1,-1), 4),
+        ("BOTTOMPADDING", (0,0), (-1,-1), 8),
+    ]))
+    story.append(info_table)
+    story.append(Spacer(1, 16))
+
+    # Divider before photos
     story.append(Paragraph("Package Photos", ParagraphStyle(name="Div", fontName="Times-Bold", fontSize=12, leading=14, textColor=colors.HexColor("#4a433b"))))
     story.append(Spacer(1, 4))
     story.append(Table([[""]], colWidths=[doc.width], style=TableStyle([("LINEBELOW",(0,0),(-1,0),0.5,colors.HexColor("#b0a495"))])))
@@ -642,18 +675,24 @@ def make_delivery_pdf(meta: dict, images: list[tuple[str, bytes]]) -> tuple[byte
     def img_card(name, data, idx):
         img = PILImage.open(io.BytesIO(data))
         iw, ih = img.size
-        # maintain aspect but fit within card image area
-        max_w = cell_w - 12
-        max_h = cell_h - 30
+        # maintain aspect into a consistent frame
+        max_w = cell_w - 16
+        max_h = cell_h - 42
         scale = min(max_w / iw, max_h / ih)
         new_size = (int(iw * scale), int(ih * scale))
+        img_resized = img.resize(new_size, PILImage.LANCZOS)
+        # center inside a white frame to keep alignment consistent
+        frame = PILImage.new("RGB", (int(max_w), int(max_h)), "white")
+        fx = (frame.width - new_size[0]) // 2
+        fy = (frame.height - new_size[1]) // 2
+        frame.paste(img_resized, (fx, fy))
         bio = io.BytesIO()
-        img.resize(new_size, PILImage.LANCZOS).save(bio, format="PNG")
+        frame.save(bio, format="PNG")
         bio.seek(0)
         cap_style = ParagraphStyle(name="Cap", fontName="Times-Roman", fontSize=10, leading=12, alignment=1, textColor=colors.HexColor("#4a433b"))
         label = f"Package {idx+1}"
         table = Table(
-            [[Image(bio, width=new_size[0], height=new_size[1])],
+            [[Image(bio, width=frame.width, height=frame.height)],
              [Paragraph(label, cap_style)]],
             colWidths=[cell_w - 8]
         )
@@ -662,10 +701,10 @@ def make_delivery_pdf(meta: dict, images: list[tuple[str, bytes]]) -> tuple[byte
             ("VALIGN",(0,0),(-1,-1),"TOP"),
             ("BOX",(0,0),(-1,-1),0.5,colors.HexColor("#d1c6b8")),
             ("BACKGROUND",(0,0),(-1,-1),colors.whitesmoke),
-            ("LEFTPADDING",(0,0),(-1,-1),4),
-            ("RIGHTPADDING",(0,0),(-1,-1),4),
-            ("TOPPADDING",(0,0),(-1,-1),4),
-            ("BOTTOMPADDING",(0,0),(-1,-1),4),
+            ("LEFTPADDING",(0,0),(-1,-1),6),
+            ("RIGHTPADDING",(0,0),(-1,-1),6),
+            ("TOPPADDING",(0,0),(-1,-1),6),
+            ("BOTTOMPADDING",(0,0),(-1,-1),6),
         ]))
         return table
 
