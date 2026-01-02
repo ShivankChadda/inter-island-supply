@@ -148,23 +148,28 @@ def normalize_source_name(source: str) -> str:
 
 MARKER_IMAGES = load_marker_images()
 
+# Default delivery master roll if present on disk
+if os.path.exists(DELIVERY_TEMPLATE):
+    DELIVERY_XLSX = DELIVERY_TEMPLATE
+
 
 def load_delivery_row(vendor: str, path: str) -> dict:
     """Load delivery master and return row dict for the vendor."""
     required_cols = [
-        "Vendor Name",
-        "Vendor Marker",
-        "Date of Sailing",
-        "Ship Name",
-        "Number of Packages",
-        "Number of Boxes",
-        "Number of Trays",
+        "Sailing_Date",
+        "Ship_Name",
+        "Vendor_Code",
+        "Vendor_Name",
+        "Vendor_Location",
+        "Number of packages",
+        "Number of boxes",
+        "Number of trays",
     ]
     df = pd.read_excel(path)
     missing = [c for c in required_cols if c not in df.columns]
     if missing:
         raise ValueError(f"Delivery master missing columns: {', '.join(missing)}")
-    mask = df["Vendor Name"].fillna("").str.strip().str.lower() == vendor.strip().lower()
+    mask = df["Vendor_Name"].fillna("").str.strip().str.lower() == vendor.strip().lower()
     if not mask.any():
         raise ValueError(f"Vendor '{vendor}' not found in Delivery Slip Master Roll.")
     row = df[mask].iloc[0]
@@ -175,13 +180,14 @@ def load_delivery_row(vendor: str, path: str) -> dict:
         except Exception:
             return 0
     meta = {
-        "vendor_name": str(row["Vendor Name"]).strip(),
-        "vendor_marker": str(row["Vendor Marker"]).strip(),
-        "sailing_date": row["Date of Sailing"],
-        "ship_name": str(row["Ship Name"]).strip(),
-        "packages": val_int(row["Number of Packages"]),
-        "boxes": val_int(row["Number of Boxes"]),
-        "trays": val_int(row["Number of Trays"]),
+        "vendor_name": str(row["Vendor_Name"]).strip(),
+        "vendor_marker": str(row["Vendor_Code"]).strip(),
+        "vendor_location": str(row.get("Vendor_Location", "")).strip(),
+        "sailing_date": row["Sailing_Date"],
+        "ship_name": str(row["Ship_Name"]).strip(),
+        "packages": val_int(row["Number of packages"]),
+        "boxes": val_int(row["Number of boxes"]),
+        "trays": val_int(row["Number of trays"]),
     }
     return meta
 
@@ -576,6 +582,7 @@ def make_delivery_pdf(meta: dict, images: list[tuple[str, bytes]]) -> tuple[byte
     header_rows.append([logo_flow])
     header_rows.append([Paragraph("Delivery Slip", title_style)])
     header_rows.append([Paragraph(vendor, vendor_style)])
+    header_rows.append([Paragraph(f"Location: {meta.get('vendor_location','')}", meta_style)])
     header_rows.append([Paragraph(f"Ship: {ship_name}", meta_style)])
     header_rows.append([Paragraph(f"Sailing Date: {sailing_date}", meta_style)])
     header = Table(header_rows, colWidths=[doc.width])
@@ -756,6 +763,7 @@ def home():
     global CURRENT_XLSX
     global LAST_PROCESSED_AT
     global DELIVERY_CACHE
+    global DELIVERY_XLSX
     error = None
     html_snippet = None
     delivery_snippet = None
@@ -898,6 +906,7 @@ def home():
     today_str = datetime.now(LOCAL_TZ).strftime("%d %b %Y")
     status_text = "Master Roll loaded" if CURRENT_XLSX != DEFAULT_XLSX else "Default Master Roll"
     last_processed = LAST_PROCESSED_AT or "Not processed"
+    delivery_file_name = os.path.basename(DELIVERY_XLSX) if DELIVERY_XLSX else ""
 
     # file summary for preview card (if not already from upload-only branch)
     if file_rows is None:
@@ -1006,19 +1015,23 @@ def home():
               <input type="hidden" name="mode" value="delivery" />
               <label for="delivery_vendor">Vendor Name *</label>
               <input type="text" id="delivery_vendor" name="delivery_vendor" required placeholder="e.g., Anand" />
-              <label for="delivery_packages">Number of Packages (optional)</label>
-              <input type="number" id="delivery_packages" name="delivery_packages" min="0" placeholder="Leave blank if not provided" />
-              <label for="delivery_trays">Number of Trays (optional)</label>
-              <input type="number" id="delivery_trays" name="delivery_trays" min="0" placeholder="Leave blank if not provided" />
-              <label for="delivery_boxes">Number of Boxes (optional)</label>
-              <input type="number" id="delivery_boxes" name="delivery_boxes" min="0" placeholder="Leave blank if not provided" />
-              <div class="microcopy">0 will be omitted from slip.</div>
+              <label for="delivery_workbook">Delivery Slip Master Roll (.xlsx)</label>
+              <div id="delivery-workbook-drop" class="dropzone">
+                <img src="{{ clipart_data }}" alt="Excel file" />
+                <div class="dz-title">Drop Delivery Slip Master Roll</div>
+                <div class="dz-sub">or click to browse (.xlsx)</div>
+                <div class="dz-hint">Excel files only (.xlsx)</div>
+                <input type="file" id="delivery_workbook" name="delivery_workbook" accept=".xlsx" {% if not delivery_file_name %}required{% endif %} />
+              </div>
+              {% if delivery_file_name %}
+                <div class="microcopy">Using: {{ delivery_file_name }}</div>
+              {% endif %}
               <label for="photos">Upload photos (folder or select multiple)</label>
-              <div id="drop-zone" class="dropzone">
+              <div id="delivery-photos-drop" class="dropzone">
                 <div class="dz-title">Drop photos here</div>
                 <div class="dz-sub">or click to browse (PNG, JPG, JPEG)</div>
                 <div class="dz-hint">You can select multiple files</div>
-                <input type="file" id="photos" name="photos" accept="image/png,image/jpeg" multiple />
+                <input type="file" id="photos" name="photos" accept="image/png,image/jpeg" multiple required />
               </div>
               <button class="btn" type="submit">Generate</button>
               <div class="microcopy">Generates preview before download.</div>
@@ -1076,7 +1089,7 @@ def home():
                 </div>
                 <input type="file" id="workbook" name="workbook" accept=".xlsx" style="display:none;" />
               {% else %}
-                <div id="drop-zone" class="dropzone">
+                <div id="dispatch-drop" class="dropzone">
                   <img src="{{ clipart_data }}" alt="Excel file" />
                   <div class="dz-title">Drop Master Roll here</div>
                   <div class="dz-sub">or click to browse (.xlsx)</div>
@@ -1113,25 +1126,10 @@ def home():
         <footer>designed by Shivank Chadda • Internal tool • FGN Operations • v1.0</footer>
       </div>
       <script>
-        const dropZone = document.getElementById('drop-zone');
-        const fileInput = document.getElementById('workbook') || document.getElementById('photos');
         const uploadOnly = document.getElementById('upload_only');
-        const replaceBtn = document.getElementById('replace-btn');
         const slipSelect = document.getElementById('slip_type');
         const identifierInput = document.getElementById('identifier');
         const allMode = document.getElementById('all_mode');
-
-        function triggerUpload(files) {
-          if (!files || !files.length) return;
-          fileInput.files = files;
-          // allow submission without slip/identifier for upload-only (dispatch)
-          if (uploadOnly) {
-            if (slipSelect) slipSelect.removeAttribute('required');
-            if (identifierInput) identifierInput.removeAttribute('required');
-            uploadOnly.value = "1";
-            fileInput.form.submit();
-          }
-        }
 
         function toggleIdentifierRequired() {
           const isAll = allMode && allMode.checked;
@@ -1141,31 +1139,61 @@ def home():
             identifierInput.setAttribute('required', 'required');
           }
         }
-
         if (allMode) {
           allMode.addEventListener('change', toggleIdentifierRequired);
           toggleIdentifierRequired();
         }
 
-        if (dropZone) {
-          dropZone.addEventListener('click', () => fileInput.click());
-          dropZone.addEventListener('dragover', (e) => {
+        function attachDropzone(zoneId, inputId, autoSubmit) {
+          const dz = document.getElementById(zoneId);
+          const input = document.getElementById(inputId);
+          if (!dz || !input) return;
+          dz.addEventListener('click', () => input.click());
+          dz.addEventListener('dragover', (e) => { e.preventDefault(); dz.classList.add('hover'); });
+          dz.addEventListener('dragleave', () => dz.classList.remove('hover'));
+          dz.addEventListener('drop', (e) => {
             e.preventDefault();
-            dropZone.classList.add('hover');
-          });
-          dropZone.addEventListener('dragleave', () => dropZone.classList.remove('hover'));
-          dropZone.addEventListener('drop', (e) => {
-            e.preventDefault();
-            dropZone.classList.remove('hover');
+            dz.classList.remove('hover');
             if (e.dataTransfer.files && e.dataTransfer.files.length) {
-              triggerUpload(e.dataTransfer.files);
+              input.files = e.dataTransfer.files;
+              if (autoSubmit && uploadOnly) {
+                if (slipSelect) slipSelect.removeAttribute('required');
+                if (identifierInput) identifierInput.removeAttribute('required');
+                uploadOnly.value = "1";
+                input.form.submit();
+              }
             }
           });
-          fileInput.addEventListener('change', (e) => triggerUpload(e.target.files));
+          input.addEventListener('change', (e) => {
+            if (e.target.files && e.target.files.length) {
+              if (autoSubmit && uploadOnly) {
+                if (slipSelect) slipSelect.removeAttribute('required');
+                if (identifierInput) identifierInput.removeAttribute('required');
+                uploadOnly.value = "1";
+                input.form.submit();
+              }
+            }
+          });
         }
-        if (replaceBtn) {
-          replaceBtn.addEventListener('click', () => fileInput.click());
-          fileInput.addEventListener('change', (e) => triggerUpload(e.target.files));
+
+        attachDropzone('dispatch-drop', 'workbook', true);
+        attachDropzone('delivery-workbook-drop', 'delivery_workbook', false);
+        attachDropzone('delivery-photos-drop', 'photos', false);
+
+        const replaceBtn = document.getElementById('replace-btn');
+        const replaceInput = document.getElementById('workbook');
+        if (replaceBtn && replaceInput) {
+          replaceBtn.addEventListener('click', () => replaceInput.click());
+          replaceInput.addEventListener('change', (e) => {
+            if (e.target.files && e.target.files.length) {
+              if (uploadOnly) {
+                if (slipSelect) slipSelect.removeAttribute('required');
+                if (identifierInput) identifierInput.removeAttribute('required');
+                uploadOnly.value = "1";
+              }
+              replaceInput.form.submit();
+            }
+          });
         }
       </script>
     </body>
@@ -1189,6 +1217,7 @@ def home():
         file_modified=file_modified,
         last_processed=last_processed,
         mode=mode,
+        delivery_file_name=delivery_file_name,
     )
 
 
