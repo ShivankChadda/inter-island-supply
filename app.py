@@ -578,8 +578,13 @@ def make_delivery_pdf(meta: dict, images: list[tuple[str, bytes]]) -> tuple[byte
     # Header row: logo left, company details right (right-aligned)
     logo_flow = ""
     try:
-        logo = Image(LOGO_PATH, width=120, height=70)
-        logo_flow = logo
+        pil_logo = PILImage.open(LOGO_PATH)
+        lw, lh = pil_logo.size
+        max_h = 70  # px in PDF space
+        scale = min(max_h / lh, 1.0)
+        new_w = lw * scale
+        new_h = lh * scale
+        logo_flow = Image(LOGO_PATH, width=new_w, height=new_h)
     except Exception:
         pass
     company_lines = [
