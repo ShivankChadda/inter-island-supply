@@ -565,37 +565,38 @@ def make_delivery_pdf(meta: dict, images: list[tuple[str, bytes]]) -> tuple[byte
     trays = meta.get("trays") or 0
     boxes = meta.get("boxes") or 0
 
-    # Header band
+    # Header band (full-width block, left aligned)
     header_bg = colors.HexColor("#f6f3ed")
-    title_style = ParagraphStyle(name="Title", fontName="Times-Roman", fontSize=12, leading=14, textColor=colors.HexColor("#4a433b"))
-    vendor_style = ParagraphStyle(name="Vendor", fontName="Times-Bold", fontSize=24, leading=28, textColor=colors.HexColor("#2f2a24"))
+    small_label = ParagraphStyle(name="SmallLabel", fontName="Times-Roman", fontSize=10, leading=12, textColor=colors.HexColor("#6a6157"))
+    vendor_style = ParagraphStyle(name="Vendor", fontName="Times-Bold", fontSize=26, leading=30, textColor=colors.HexColor("#2f2a24"))
     meta_style = ParagraphStyle(name="MetaSmall", fontName="Times-Roman", fontSize=11, leading=13, textColor=colors.HexColor("#5a544d"))
 
-    header_rows = []
-    # logo
     logo_flow = ""
     try:
-        logo = Image(LOGO_PATH, width=150, height=60)
+        logo = Image(LOGO_PATH, width=155, height=64)
         logo_flow = logo
     except Exception:
         pass
-    header_rows.append([logo_flow])
-    header_rows.append([Paragraph("Delivery Slip", title_style)])
-    header_rows.append([Paragraph(vendor, vendor_style)])
-    header_rows.append([Paragraph(f"Location: {meta.get('vendor_location','')}", meta_style)])
-    header_rows.append([Paragraph(f"Ship: {ship_name}", meta_style)])
-    header_rows.append([Paragraph(f"Sailing Date: {sailing_date}", meta_style)])
+
+    header_rows = [
+        [logo_flow],
+        [Paragraph("Delivery Slip", small_label)],
+        [Paragraph(vendor, vendor_style)],
+        [Paragraph(f"Ship: {ship_name}", meta_style)],
+        [Paragraph(f"Sailing Date: {sailing_date}", meta_style)],
+    ]
     header = Table(header_rows, colWidths=[doc.width])
     header.setStyle(TableStyle([
         ("BACKGROUND", (0,0), (-1,-1), header_bg),
-        ("LEFTPADDING", (0,0), (-1,-1), 10),
-        ("RIGHTPADDING", (0,0), (-1,-1), 10),
-        ("TOPPADDING", (0,0), (-1,-1), 6),
-        ("BOTTOMPADDING", (0,0), (-1,-1), 10),
+        ("LEFTPADDING", (0,0), (-1,-1), 12),
+        ("RIGHTPADDING", (0,0), (-1,-1), 12),
+        ("TOPPADDING", (0,0), (-1,-1), 10),
+        ("BOTTOMPADDING", (0,0), (-1,-1), 12),
         ("ALIGN", (0,0), (-1,-1), "LEFT"),
+        ("VALIGN", (0,0), (-1,-1), "TOP"),
     ]))
     story.append(header)
-    story.append(Spacer(1, 14))
+    story.append(Spacer(1, 18))
 
     # Summary boxes
     summary_items = []
@@ -606,34 +607,40 @@ def make_delivery_pdf(meta: dict, images: list[tuple[str, bytes]]) -> tuple[byte
     if boxes > 0:
         summary_items.append(("Boxes", boxes))
     if summary_items:
-        cols = len(summary_items)
-        col_widths = [doc.width / cols] * cols
-        data = []
-        row = []
-        for label, val in summary_items:
-            row.append([
-                Paragraph(str(val), ParagraphStyle(name="Num", fontName="Times-Bold", fontSize=16, alignment=1)),
-                Paragraph(label, ParagraphStyle(name="Lbl", fontName="Times-Roman", fontSize=11, textColor=colors.HexColor("#5a544d"), alignment=1))
-            ])
-        data.append(row)
-        table = Table(data, colWidths=col_widths)
+        # Always render into 3 slots, centering actual values
+        slots = ["", "", ""]
+        start_idx = (3 - len(summary_items)) // 2
+        for i, item in enumerate(summary_items):
+            slots[start_idx + i] = item
+        cells = []
+        num_style = ParagraphStyle(name="Num", fontName="Times-Bold", fontSize=16, alignment=1, textColor=colors.HexColor("#3b332a"))
+        lbl_style = ParagraphStyle(name="Lbl", fontName="Times-Roman", fontSize=11, textColor=colors.HexColor("#5a544d"), alignment=1)
+        for slot in slots:
+            if slot == "":
+                cells.append("")
+            else:
+                label, val = slot
+                cells.append([
+                    Paragraph(str(val), num_style),
+                    Paragraph(label, lbl_style),
+                ])
+        table = Table([cells], colWidths=[doc.width/3]*3)
         table.setStyle(TableStyle([
             ("VALIGN", (0,0), (-1,-1), "MIDDLE"),
             ("ALIGN", (0,0), (-1,-1), "CENTER"),
-            ("INNERGRID", (0,0), (-1,-1), 0.5, colors.HexColor("#d1c6b8")),
             ("BOX", (0,0), (-1,-1), 0.5, colors.HexColor("#d1c6b8")),
             ("BACKGROUND", (0,0), (-1,-1), colors.HexColor("#fbf9f6")),
-            ("TOPPADDING", (0,0), (-1,-1), 8),
-            ("BOTTOMPADDING", (0,0), (-1,-1), 8),
+            ("TOPPADDING", (0,0), (-1,-1), 10),
+            ("BOTTOMPADDING", (0,0), (-1,-1), 10),
         ]))
         story.append(table)
-        story.append(Spacer(1, 14))
+        story.append(Spacer(1, 18))
 
     # Divider
     story.append(Paragraph("Package Photos", ParagraphStyle(name="Div", fontName="Times-Bold", fontSize=12, leading=14, textColor=colors.HexColor("#4a433b"))))
     story.append(Spacer(1, 4))
-    story.append(Table([[""]], colWidths=[doc.width], style=TableStyle([("LINEBELOW",(0,0),(-1,0),0.5,colors.HexColor("#b0a495"))])))
-    story.append(Spacer(1, 10))
+    story.append(Table([[""]], colWidths=[doc.width], style=TableStyle([("LINEBELOW",(0,0),(-1,0),0.6,colors.HexColor("#b0a495"))])))
+    story.append(Spacer(1, 14))
 
     # Images grid 3x3 per page with card styling
     cell_w = (doc.width - 12) / 3
@@ -642,18 +649,24 @@ def make_delivery_pdf(meta: dict, images: list[tuple[str, bytes]]) -> tuple[byte
     def img_card(name, data, idx):
         img = PILImage.open(io.BytesIO(data))
         iw, ih = img.size
-        # maintain aspect but fit within card image area
-        max_w = cell_w - 12
-        max_h = cell_h - 30
-        scale = min(max_w / iw, max_h / ih)
+        # maintain aspect into a fixed frame
+        frame_w = cell_w - 16
+        frame_h = cell_h - 42
+        scale = min(frame_w / iw, frame_h / ih)
         new_size = (int(iw * scale), int(ih * scale))
+        img_resized = img.resize(new_size, PILImage.LANCZOS)
+        # center on white canvas to enforce consistent aspect
+        canvas_img = PILImage.new("RGB", (int(frame_w), int(frame_h)), "white")
+        cx = (canvas_img.width - new_size[0]) // 2
+        cy = (canvas_img.height - new_size[1]) // 2
+        canvas_img.paste(img_resized, (cx, cy))
         bio = io.BytesIO()
-        img.resize(new_size, PILImage.LANCZOS).save(bio, format="PNG")
+        canvas_img.save(bio, format="PNG")
         bio.seek(0)
         cap_style = ParagraphStyle(name="Cap", fontName="Times-Roman", fontSize=10, leading=12, alignment=1, textColor=colors.HexColor("#4a433b"))
         label = f"Package {idx+1}"
         table = Table(
-            [[Image(bio, width=new_size[0], height=new_size[1])],
+            [[Image(bio, width=canvas_img.width, height=canvas_img.height)],
              [Paragraph(label, cap_style)]],
             colWidths=[cell_w - 8]
         )
@@ -662,10 +675,10 @@ def make_delivery_pdf(meta: dict, images: list[tuple[str, bytes]]) -> tuple[byte
             ("VALIGN",(0,0),(-1,-1),"TOP"),
             ("BOX",(0,0),(-1,-1),0.5,colors.HexColor("#d1c6b8")),
             ("BACKGROUND",(0,0),(-1,-1),colors.whitesmoke),
-            ("LEFTPADDING",(0,0),(-1,-1),4),
-            ("RIGHTPADDING",(0,0),(-1,-1),4),
-            ("TOPPADDING",(0,0),(-1,-1),4),
-            ("BOTTOMPADDING",(0,0),(-1,-1),4),
+            ("LEFTPADDING",(0,0),(-1,-1),6),
+            ("RIGHTPADDING",(0,0),(-1,-1),6),
+            ("TOPPADDING",(0,0),(-1,-1),6),
+            ("BOTTOMPADDING",(0,0),(-1,-1),6),
         ]))
         return table
 
