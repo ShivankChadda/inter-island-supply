@@ -38,7 +38,7 @@ DELIVERY_CACHE = {"pdf": None, "filename": None}  # simple cache for delivery sl
 DELIVERY_XLSX = None  # uploaded delivery master roll (per session)
 
 # Branding asset and label sizing in inches / pixels
-LOGO_PATH = "Farmers_Wordmark_Badge_Transparent_1_3000px.png"
+LOGO_PATH = "new_logo.png"
 CLIPART_PATH = "Excel clipart.png"
 MARKER_DIR = "Marker box"
 TEMPLATE_PATH = "Master Roll Template.xlsx"
@@ -562,6 +562,9 @@ def make_delivery_pdf(meta: dict, images: list[tuple[str, bytes]]) -> tuple[byte
     else:
         sailing_date = str(sailing_raw)
     packages = meta.get("packages") or 0
+    trays = meta.get("trays") or 0
+    boxes = meta.get("boxes") or 0
+    total_packages = packages + trays + boxes
 
     # Typography hierarchy (Bell MT intent; Times used as fallback)
     company_name_style = ParagraphStyle(name="CompanyName", fontName="Times-Bold", fontSize=12, leading=14, alignment=2, textColor=colors.HexColor("#2f2a24"))
@@ -639,7 +642,7 @@ def make_delivery_pdf(meta: dict, images: list[tuple[str, bytes]]) -> tuple[byte
     meta_rows = [
         [Paragraph("Ship Name", meta_label_style), Paragraph(ship_name, meta_value_style)],
         [Paragraph("Sailing Date", meta_label_style), Paragraph(sailing_date, meta_value_style)],
-        [Paragraph("Total Packages", meta_label_style), Paragraph(str(packages), meta_value_style)],
+        [Paragraph("Total Packages", meta_label_style), Paragraph(str(total_packages), meta_value_style)],
     ]
     right_block = Table(meta_rows, colWidths=[doc.width * 0.18, doc.width * 0.22])
     right_block.setStyle(TableStyle([
@@ -661,6 +664,40 @@ def make_delivery_pdf(meta: dict, images: list[tuple[str, bytes]]) -> tuple[byte
     ]))
     story.append(info_table)
     story.append(Spacer(1, 16))
+
+    # Summary boxes (Packages / Trays / Boxes), show only non-zero, center the row
+    summary_items = []
+    if packages > 0:
+        summary_items.append(("Packages", packages))
+    if trays > 0:
+        summary_items.append(("Trays", trays))
+    if boxes > 0:
+        summary_items.append(("Boxes", boxes))
+    if summary_items:
+        slots = ["", "", ""]
+        start_idx = (3 - len(summary_items)) // 2
+        for i, item in enumerate(summary_items):
+            slots[start_idx + i] = item
+        num_style = ParagraphStyle(name="Num", fontName="Times-Bold", fontSize=16, leading=18, alignment=1, textColor=colors.HexColor("#3b332a"))
+        lbl_style = ParagraphStyle(name="Lbl", fontName="Times-Roman", fontSize=11, leading=13, alignment=1, textColor=colors.HexColor("#5a544d"))
+        cells = []
+        for slot in slots:
+            if slot == "":
+                cells.append("")
+            else:
+                label, val = slot
+                cells.append([Paragraph(str(val), num_style), Paragraph(label, lbl_style)])
+        summary_table = Table([cells], colWidths=[doc.width/3]*3)
+        summary_table.setStyle(TableStyle([
+            ("VALIGN", (0,0), (-1,-1), "MIDDLE"),
+            ("ALIGN", (0,0), (-1,-1), "CENTER"),
+            ("BOX", (0,0), (-1,-1), 0.5, colors.HexColor("#d1c6b8")),
+            ("BACKGROUND", (0,0), (-1,-1), colors.HexColor("#fbf9f6")),
+            ("TOPPADDING", (0,0), (-1,-1), 8),
+            ("BOTTOMPADDING", (0,0), (-1,-1), 8),
+        ]))
+        story.append(summary_table)
+        story.append(Spacer(1, 14))
 
     # Divider before photos
     story.append(Paragraph("Package Photos", ParagraphStyle(name="Div", fontName="Times-Bold", fontSize=12, leading=14, textColor=colors.HexColor("#4a433b"))))
