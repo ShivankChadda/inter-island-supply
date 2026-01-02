@@ -35,12 +35,14 @@ CURRENT_XLSX = DEFAULT_XLSX
 LAST_PROCESSED_AT = None  # track last processed timestamp for UI (localized)
 LOCAL_TZ = ZoneInfo("Asia/Kolkata")  # adjust to your local timezone
 DELIVERY_CACHE = {"pdf": None, "filename": None}  # simple cache for delivery slip PDF
+DELIVERY_XLSX = None  # uploaded delivery master roll (per session)
 
 # Branding asset and label sizing in inches / pixels
 LOGO_PATH = "Farmers_Wordmark_Badge_Transparent_1_3000px.png"
 CLIPART_PATH = "Excel clipart.png"
 MARKER_DIR = "Marker box"
 TEMPLATE_PATH = "Master Roll Template.xlsx"
+DELIVERY_TEMPLATE = "Delivery Slip Master Roll.xlsx"  # optional default path if bundled
 LABEL_WIDTH_IN = 5  # label width in inches (landscape 5x3)
 LABEL_HEIGHT_IN = 3  # label height in inches
 LABEL_DPI = 300  # DPI for high-quality PNG output
@@ -145,6 +147,43 @@ def normalize_source_name(source: str) -> str:
 
 
 MARKER_IMAGES = load_marker_images()
+
+
+def load_delivery_row(vendor: str, path: str) -> dict:
+    """Load delivery master and return row dict for the vendor."""
+    required_cols = [
+        "Vendor Name",
+        "Vendor Marker",
+        "Date of Sailing",
+        "Ship Name",
+        "Number of Packages",
+        "Number of Boxes",
+        "Number of Trays",
+    ]
+    df = pd.read_excel(path)
+    missing = [c for c in required_cols if c not in df.columns]
+    if missing:
+        raise ValueError(f"Delivery master missing columns: {', '.join(missing)}")
+    mask = df["Vendor Name"].fillna("").str.strip().str.lower() == vendor.strip().lower()
+    if not mask.any():
+        raise ValueError(f"Vendor '{vendor}' not found in Delivery Slip Master Roll.")
+    row = df[mask].iloc[0]
+    def val_int(x):
+        try:
+            n = int(x)
+            return n if n >= 0 else 0
+        except Exception:
+            return 0
+    meta = {
+        "vendor_name": str(row["Vendor Name"]).strip(),
+        "vendor_marker": str(row["Vendor Marker"]).strip(),
+        "sailing_date": row["Date of Sailing"],
+        "ship_name": str(row["Ship Name"]).strip(),
+        "packages": val_int(row["Number of Packages"]),
+        "boxes": val_int(row["Number of Boxes"]),
+        "trays": val_int(row["Number of Trays"]),
+    }
+    return meta
 
 COLS = ["Serial Number", "Item", "Quantity", "Unit"]
 
@@ -503,61 +542,139 @@ def make_label_zip(items: list[dict], meta: dict, identifier: str) -> tuple[byte
     return zip_buf.read(), filename
 
 
-def make_delivery_pdf(vendor: str, packages: int | None, trays: int | None, boxes: int | None, images: list[tuple[str, bytes]]) -> tuple[bytes, str]:
-    """Generate a delivery slip PDF with header and 3x3 image grid."""
+def make_delivery_pdf(meta: dict, images: list[tuple[str, bytes]]) -> tuple[bytes, str]:
+    """Generate a delivery slip PDF with structured header, summary, and 3x3 photo grid."""
     buf = io.BytesIO()
     doc = SimpleDocTemplate(buf, pagesize=A4, rightMargin=36, leftMargin=36, topMargin=36, bottomMargin=36)
     story = []
 
-    # Header block
-    meta_style = ParagraphStyle(name="Meta", fontName="Times-Roman", fontSize=12, leading=15, spaceAfter=4)
-    story.append(Paragraph(f"<b>Vendor Name</b>: {vendor}", meta_style))
-    if packages not in (None, 0):
-        story.append(Paragraph(f"<b>Number of Packages</b>: {packages}", meta_style))
-    if trays not in (None, 0):
-        story.append(Paragraph(f"<b>Number of Trays</b>: {trays}", meta_style))
-    if boxes not in (None, 0):
-        story.append(Paragraph(f"<b>Number of Boxes</b>: {boxes}", meta_style))
-    story.append(Spacer(1, 12))
+    vendor = meta.get("vendor_name", "")
+    ship_name = meta.get("ship_name", "")
+    sailing_raw = meta.get("sailing_date", "")
+    if hasattr(sailing_raw, "strftime"):
+        sailing_date = sailing_raw.strftime("%d %B %Y")
+    else:
+        sailing_date = str(sailing_raw)
+    packages = meta.get("packages") or 0
+    trays = meta.get("trays") or 0
+    boxes = meta.get("boxes") or 0
 
-    # Images grid 3x3 per page
-    cell_w = (A4[0] - 72) / 3  # approx, considering margins
-    cell_h = (A4[1] - 180) / 3
+    # Header band
+    header_bg = colors.HexColor("#f6f3ed")
+    title_style = ParagraphStyle(name="Title", fontName="Times-Roman", fontSize=12, leading=14, textColor=colors.HexColor("#4a433b"))
+    vendor_style = ParagraphStyle(name="Vendor", fontName="Times-Bold", fontSize=24, leading=28, textColor=colors.HexColor("#2f2a24"))
+    meta_style = ParagraphStyle(name="MetaSmall", fontName="Times-Roman", fontSize=11, leading=13, textColor=colors.HexColor("#5a544d"))
 
-    def img_flowable(name, data, idx):
+    header_rows = []
+    # logo
+    logo_flow = ""
+    try:
+        logo = Image(LOGO_PATH, width=150, height=60)
+        logo_flow = logo
+    except Exception:
+        pass
+    header_rows.append([logo_flow])
+    header_rows.append([Paragraph("Delivery Slip", title_style)])
+    header_rows.append([Paragraph(vendor, vendor_style)])
+    header_rows.append([Paragraph(f"Ship: {ship_name}", meta_style)])
+    header_rows.append([Paragraph(f"Sailing Date: {sailing_date}", meta_style)])
+    header = Table(header_rows, colWidths=[doc.width])
+    header.setStyle(TableStyle([
+        ("BACKGROUND", (0,0), (-1,-1), header_bg),
+        ("LEFTPADDING", (0,0), (-1,-1), 10),
+        ("RIGHTPADDING", (0,0), (-1,-1), 10),
+        ("TOPPADDING", (0,0), (-1,-1), 6),
+        ("BOTTOMPADDING", (0,0), (-1,-1), 10),
+        ("ALIGN", (0,0), (-1,-1), "LEFT"),
+    ]))
+    story.append(header)
+    story.append(Spacer(1, 14))
+
+    # Summary boxes
+    summary_items = []
+    if packages > 0:
+        summary_items.append(("Packages", packages))
+    if trays > 0:
+        summary_items.append(("Trays", trays))
+    if boxes > 0:
+        summary_items.append(("Boxes", boxes))
+    if summary_items:
+        cols = len(summary_items)
+        col_widths = [doc.width / cols] * cols
+        data = []
+        row = []
+        for label, val in summary_items:
+            row.append([
+                Paragraph(str(val), ParagraphStyle(name="Num", fontName="Times-Bold", fontSize=16, alignment=1)),
+                Paragraph(label, ParagraphStyle(name="Lbl", fontName="Times-Roman", fontSize=11, textColor=colors.HexColor("#5a544d"), alignment=1))
+            ])
+        data.append(row)
+        table = Table(data, colWidths=col_widths)
+        table.setStyle(TableStyle([
+            ("VALIGN", (0,0), (-1,-1), "MIDDLE"),
+            ("ALIGN", (0,0), (-1,-1), "CENTER"),
+            ("INNERGRID", (0,0), (-1,-1), 0.5, colors.HexColor("#d1c6b8")),
+            ("BOX", (0,0), (-1,-1), 0.5, colors.HexColor("#d1c6b8")),
+            ("BACKGROUND", (0,0), (-1,-1), colors.HexColor("#fbf9f6")),
+            ("TOPPADDING", (0,0), (-1,-1), 8),
+            ("BOTTOMPADDING", (0,0), (-1,-1), 8),
+        ]))
+        story.append(table)
+        story.append(Spacer(1, 14))
+
+    # Divider
+    story.append(Paragraph("Package Photos", ParagraphStyle(name="Div", fontName="Times-Bold", fontSize=12, leading=14, textColor=colors.HexColor("#4a433b"))))
+    story.append(Spacer(1, 4))
+    story.append(Table([[""]], colWidths=[doc.width], style=TableStyle([("LINEBELOW",(0,0),(-1,0),0.5,colors.HexColor("#b0a495"))])))
+    story.append(Spacer(1, 10))
+
+    # Images grid 3x3 per page with card styling
+    cell_w = (doc.width - 12) / 3
+    cell_h = (A4[1] - doc.topMargin - doc.bottomMargin - 200) / 3
+
+    def img_card(name, data, idx):
         img = PILImage.open(io.BytesIO(data))
         iw, ih = img.size
-        scale = min(cell_w / iw, cell_h / ih)
+        # maintain aspect but fit within card image area
+        max_w = cell_w - 12
+        max_h = cell_h - 30
+        scale = min(max_w / iw, max_h / ih)
         new_size = (int(iw * scale), int(ih * scale))
         bio = io.BytesIO()
         img.resize(new_size, PILImage.LANCZOS).save(bio, format="PNG")
         bio.seek(0)
-        caption = Paragraph(f"{idx+1}. {name}", ParagraphStyle(name="Cap", fontSize=10, leading=12))
-        return [Image(bio, width=new_size[0], height=new_size[1]), caption]
+        cap_style = ParagraphStyle(name="Cap", fontName="Times-Roman", fontSize=10, leading=12, alignment=1, textColor=colors.HexColor("#4a433b"))
+        label = f"Package {idx+1}"
+        table = Table(
+            [[Image(bio, width=new_size[0], height=new_size[1])],
+             [Paragraph(label, cap_style)]],
+            colWidths=[cell_w - 8]
+        )
+        table.setStyle(TableStyle([
+            ("ALIGN",(0,0),(-1,-1),"CENTER"),
+            ("VALIGN",(0,0),(-1,-1),"TOP"),
+            ("BOX",(0,0),(-1,-1),0.5,colors.HexColor("#d1c6b8")),
+            ("BACKGROUND",(0,0),(-1,-1),colors.whitesmoke),
+            ("LEFTPADDING",(0,0),(-1,-1),4),
+            ("RIGHTPADDING",(0,0),(-1,-1),4),
+            ("TOPPADDING",(0,0),(-1,-1),4),
+            ("BOTTOMPADDING",(0,0),(-1,-1),4),
+        ]))
+        return table
 
-    blocks = []
-    for idx, (name, data) in enumerate(images):
-        blocks.append(img_flowable(name, data, idx))
-
-    # assemble 3x3 grid; each cell is a flowable list (image+caption)
+    cards = [img_card(name, data, idx) for idx, (name, data) in enumerate(images)]
     rows = []
-    for i in range(0, len(blocks), 3):
-        row = []
-        for cell in blocks[i:i+3]:
-            row.append(cell)
+    for i in range(0, len(cards), 3):
+        row = cards[i:i+3]
         while len(row) < 3:
             row.append("")
         rows.append(row)
         if len(rows) == 3:
-            table = Table(rows, colWidths=[cell_w]*3)
-            table.setStyle(TableStyle([("VALIGN", (0,0), (-1,-1), "TOP"), ("ALIGN",(0,0),(-1,-1),"CENTER")]))
-            story.append(table)
+            story.append(Table(rows, colWidths=[cell_w]*3, style=TableStyle([("VALIGN",(0,0),(-1,-1),"TOP"),("ALIGN",(0,0),(-1,-1),"CENTER")])))
             story.append(PageBreak())
             rows = []
     if rows:
-        table = Table(rows, colWidths=[cell_w]*3)
-        table.setStyle(TableStyle([("VALIGN", (0,0), (-1,-1), "TOP"), ("ALIGN",(0,0),(-1,-1),"CENTER")]))
-        story.append(table)
+        story.append(Table(rows, colWidths=[cell_w]*3, style=TableStyle([("VALIGN",(0,0),(-1,-1),"TOP"),("ALIGN",(0,0),(-1,-1),"CENTER")])))
 
     doc.build(story)
     buf.seek(0)
@@ -649,33 +766,25 @@ def home():
     file_rows = None
     file_cols = []
     mode = request.args.get("mode") or request.form.get("mode") or "dispatch"
+    delivery_uploaded_name = None
 
     if request.method == "POST":
         if mode == "delivery":
             vendor_name = request.form.get("delivery_vendor", "").strip()
-            pkg_raw = request.form.get("delivery_packages", "").strip()
-            tray_raw = request.form.get("delivery_trays", "").strip()
-            box_raw = request.form.get("delivery_boxes", "").strip()
+            delivery_upload = request.files.get("delivery_workbook")
             photos = request.files.getlist("photos")
-            def parse_int_field(val):
-                if val == "" or val is None:
-                    return None
-                try:
-                    num = int(val)
-                    if num < 0:
-                        raise ValueError
-                    return num
-                except Exception:
-                    raise ValueError("must be a non-negative integer or blank")
             try:
                 if not vendor_name:
                     raise ValueError("Vendor Name is required.")
-                try:
-                    packages = parse_int_field(pkg_raw)
-                    trays = parse_int_field(tray_raw)
-                    boxes = parse_int_field(box_raw)
-                except ValueError as ve:
-                    raise ValueError(f"Package/Tray/Box {ve}")
+                if delivery_upload and delivery_upload.filename:
+                    safe_name = re.sub(r"[^A-Za-z0-9._-]+", "_", delivery_upload.filename) or "delivery_master.xlsx"
+                    tmp_path = f"/tmp/{safe_name}"
+                    delivery_upload.save(tmp_path)
+                    DELIVERY_XLSX = tmp_path
+                    delivery_uploaded_name = delivery_upload.filename
+                if not DELIVERY_XLSX:
+                    raise ValueError("Please upload the Delivery Slip Master Roll (.xlsx).")
+                meta = load_delivery_row(vendor_name, DELIVERY_XLSX)
                 images = []
                 for f in photos:
                     if not f or not f.filename:
@@ -689,9 +798,9 @@ def home():
                 if not images:
                     raise ValueError("Please upload photos for the delivery slip.")
                 images.sort(key=lambda t: t[0].lower())
-                pdf_bytes, filename = make_delivery_pdf(vendor_name, packages, trays, boxes, images)
+                pdf_bytes, filename = make_delivery_pdf(meta, images)
                 DELIVERY_CACHE = {"pdf": pdf_bytes, "filename": filename}
-                delivery_snippet = f"Delivery slip ready for {vendor_name}. Photos: {len(images)}"
+                delivery_snippet = f"Delivery slip ready for {meta.get('vendor_name','')}. Photos: {len(images)}"
             except Exception as exc:
                 error = str(exc)
         else:
