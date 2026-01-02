@@ -616,7 +616,7 @@ def make_delivery_pdf(meta: dict, images: list[tuple[str, bytes]]) -> tuple[byte
         colWidths=[doc.width * 0.33, doc.width * 0.34, doc.width * 0.33],
     )
     divider.setStyle(TableStyle([
-        ("LINEBELOW", (0,0), (-1,0), 0.8, colors.black, (2,2)),
+        ("LINEBELOW", (0,0), (-1,0), 0.8, colors.black),
         ("ALIGN", (1,0), (1,0), "CENTER"),
         ("VALIGN", (0,0), (-1,-1), "MIDDLE"),
         ("TOPPADDING", (0,0), (-1,-1), 4),
