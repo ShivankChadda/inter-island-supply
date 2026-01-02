@@ -1015,82 +1015,83 @@ def home():
       <title>Slip Generator</title>
       <style>
         :root {
-          --primary: #B5906D;
-          --bg: #F1E7D5;
-          --border: #15322A;
+          --primary: #0f172a;
+          --muted: #475569;
+          --bg: #f8fafc;
+          --card: #ffffff;
+          --border: #e2e8f0;
         }
-        body { font-family: 'Bell MT','CMU Serif','Computer Modern',serif; background:var(--bg); padding:16px 16px 12px 16px; font-size:18px; }
-        .page { max-width: 1050px; margin: 0 auto; }
-        .topbar { display:flex; align-items:center; justify-content:space-between; padding:10px 14px; border:1px solid var(--border); border-radius:10px; background:white; box-shadow:0 6px 16px rgba(0,0,0,0.08); margin-bottom:14px; }
-        .top-left { display:flex; align-items:center; gap:10px; font-size:22px; font-weight:bold; color: var(--border); }
-        .top-right { text-align:right; font-family: 'Courier New', monospace; font-size:14px; line-height:1.4; color:#333; }
-        .grid { display: grid; grid-template-columns: 1fr; gap: 12px; }
-        @media (min-width: 900px) { .grid { grid-template-columns: 1fr 1.2fr; } }
-        .card { background:white; padding:20px 24px; border-radius:12px; box-shadow: 0 8px 24px rgba(0,0,0,0.08); border:1px solid #d6c9b5; }
-        .card-primary { border:2px solid var(--border); box-shadow: 0 10px 26px rgba(0,0,0,0.1); }
-        .card-secondary { border:1px solid #e8dcc7; }
-        .card-secondary.active { border:2px solid var(--primary); box-shadow: 0 10px 26px rgba(181,144,109,0.25); }
-        .card h2 { margin-top:0; text-align:left; }
-        label { display:block; margin-top:18px; margin-bottom:8px; font-weight:bold; text-align:left; }
-        input[type="text"], select { padding:10px; width: 100%; font-size:18px; font-family: 'Bell MT','CMU Serif','Computer Modern',serif; text-align:left; border:1px solid var(--border); border-radius:8px; box-sizing:border-box; background:white; margin-bottom:16px; }
-        input[type="checkbox"] { width:auto; height:auto; margin:0; accent-color: var(--border); }
-        .btn { margin-top:16px; padding:14px 18px; background:#9a7754; color:white; border:1px solid var(--border); cursor:pointer; font-size:18px; font-family: 'Bell MT','CMU Serif','Computer Modern',serif; border-radius:8px; width:100%; transition: all 0.15s ease; }
-        .btn:hover { background:#826340; box-shadow: 0 6px 12px rgba(0,0,0,0.12); }
-        .microcopy { font-size:13px; color:#444; margin-top:6px; text-align:left; }
-        .error { color:#b00020; margin-top:12px; }
-        .alert { background:#fdecea; color:#611a15; border:1px solid #f5c6cb; padding:10px 12px; border-radius:8px; margin-top:12px; }
-        .result { margin-top:10px; text-align:left; }
-        .preview-card { min-height: 300px; }
-        .header-title { display:none; }
-        .dropzone { border:1.5px dashed #a6937f; border-radius:12px; background:rgba(181,144,109,0.05); padding:16px; text-align:center; cursor:pointer; transition: all 0.2s ease; box-shadow: none; }
-        .dropzone.hover { background: rgba(181,144,109,0.08); border:1.5px solid #8c7458; box-shadow: 0 8px 18px rgba(0,0,0,0.08); }
+        body { font-family: 'Bell MT','CMU Serif','Computer Modern',serif; background:var(--bg); margin:0; }
+        .page { max-width: 1200px; margin: 0 auto; padding: 32px 24px; }
+        .header { display:flex; justify-content:space-between; align-items:flex-start; margin-bottom:24px; gap:12px; }
+        .header-title { font-size:26px; font-weight:bold; color:var(--primary); }
+        .status { text-align:right; font-size:13px; color:var(--muted); line-height:1.4; }
+        .status strong { color:var(--primary); }
+        .tabsbar { display:flex; justify-content:space-between; align-items:center; margin-bottom:24px; gap:12px; }
+        .tabs-list { display:inline-flex; border:1px solid var(--border); border-radius:10px; background:var(--card); padding:4px; }
+        .tab { padding:10px 16px; border:none; background:transparent; cursor:pointer; border-radius:8px; font-size:15px; color:var(--muted); }
+        .tab.active { background:#e2e8f0; color:var(--primary); font-weight:600; }
+        .template-btn { display:inline-flex; align-items:center; gap:8px; padding:10px 14px; border:1px solid var(--border); background:var(--card); border-radius:10px; cursor:pointer; font-size:15px; color:var(--primary); text-decoration:none; }
+        .grid { display:grid; grid-template-columns:1fr; gap:20px; }
+        @media (min-width: 1024px) { .grid { grid-template-columns:1fr 1fr; } }
+        .card { background:var(--card); padding:20px 22px; border-radius:12px; border:1px solid var(--border); box-shadow:0 10px 30px rgba(15,23,42,0.05); }
+        .card h2 { margin:0 0 12px 0; font-size:18px; color:var(--primary); }
+        label { display:block; margin-top:14px; margin-bottom:8px; font-weight:600; color:var(--primary); }
+        input[type="text"], select { padding:10px; width: 100%; font-size:16px; font-family: 'Bell MT','CMU Serif','Computer Modern',serif; text-align:left; border:1px solid var(--border); border-radius:8px; box-sizing:border-box; background:white; }
+        input[type="checkbox"] { width:auto; height:auto; margin:0; accent-color: var(--primary); }
+        .btn { margin-top:16px; padding:14px 18px; background:#0f172a; color:white; border:1px solid #0f172a; cursor:pointer; font-size:16px; font-family: 'Bell MT','CMU Serif','Computer Modern',serif; border-radius:8px; width:100%; transition: all 0.15s ease; }
+        .btn:hover { background:#111827; }
+        .microcopy { font-size:13px; color:var(--muted); margin-top:6px; text-align:left; }
+        .alert { background:#fef2f2; color:#991b1b; border:1px solid #fecaca; padding:10px 12px; border-radius:8px; margin-top:12px; }
+        .result { margin-top:10px; text-align:left; color:var(--primary); }
+        .preview-card { min-height: 320px; }
+        .dropzone { border:1.5px dashed #cbd5e1; border-radius:12px; background:#f8fafc; padding:16px; text-align:center; cursor:pointer; transition: all 0.2s ease; box-shadow: none; }
+        .dropzone.hover { background:#e2e8f0; border:1.5px solid #94a3b8; }
         .dropzone img { width: 52px; height: auto; display:block; margin:0 auto 10px; }
-        .dropzone .dz-title { font-weight:600; margin-bottom:8px; font-size:17px; color:#3a342c; }
-        .dropzone .dz-sub { color:#555; font-size:13px; margin-bottom:6px; }
-        .dropzone .dz-hint { color:#777; font-size:12px; }
+        .dropzone .dz-title { font-weight:600; margin-bottom:8px; font-size:16px; color:var(--primary); }
+        .dropzone .dz-sub { color:var(--muted); font-size:13px; margin-bottom:6px; }
+        .dropzone .dz-hint { color:#94a3b8; font-size:12px; }
         .dropzone input { display:none; }
-        .file-preview { border:1px solid var(--border); border-radius:10px; padding:14px; background:#fff; display:flex; align-items:center; gap:12px; box-shadow:0 6px 16px rgba(0,0,0,0.08); margin-bottom:16px; }
+        .file-preview { border:1px solid var(--border); border-radius:10px; padding:14px; background:#fff; display:flex; align-items:center; gap:12px; box-shadow:0 6px 16px rgba(15,23,42,0.08); margin-bottom:16px; }
         .file-preview img { width:52px; height:auto; }
         .file-meta { flex:1; text-align:left; }
-        .file-meta .name { font-weight:600; color:var(--border); font-size:15px; }
-        .file-meta .status-pill { display:inline-block; padding:4px 8px; border-radius:10px; background:#e1f3e1; color:#2e7d32; font-size:12px; margin-top:4px; }
-        .file-meta .meta-line { font-size:13px; color:#555; margin-top:4px; }
+        .file-meta .name { font-weight:600; color:var(--primary); font-size:15px; }
+        .file-meta .status-pill { display:inline-block; padding:4px 8px; border-radius:10px; background:#e2fbe2; color:#166534; font-size:12px; margin-top:4px; }
+        .file-meta .meta-line { font-size:13px; color:var(--muted); margin-top:4px; }
         .file-actions { display:flex; gap:10px; }
-        .file-actions button { padding:8px 12px; font-size:14px; border-radius:10px; border:1px solid var(--border); background:#f8f1e4; cursor:pointer; height:34px; }
+        .file-actions button { padding:8px 12px; font-size:14px; border-radius:10px; border:1px solid var(--border); background:#f8fafc; cursor:pointer; height:34px; }
         .file-actions button.primary { background:#fff; }
-        .file-actions button:hover { background:#e6d7c0; }
-        footer { margin-top:18px; text-align:center; font-size:14px; color:#444; }
-        .nav-row { display:flex; gap:8px; margin:8px 0 12px 0; }
-        .nav-btn { padding:10px 14px; border:1px solid var(--border); border-radius:10px; background:#fff; cursor:pointer; font-size:16px; text-decoration:none; color:var(--border); }
-        .nav-btn.active { background:var(--primary); color:#fff; }
+        .file-actions button:hover { background:#e2e8f0; }
+        footer { margin-top:24px; text-align:center; font-size:12px; color:#94a3b8; }
       </style>
     </head>
     <body>
       <div class="page">
-        <div class="topbar">
-          <div class="top-left">
-            <span class="top-title">FGN Dispatch Desk</span>
-          </div>
-          <div class="top-right">
-            <div>Status: {{ status_text }}</div>
+        <div class="header">
+          <div class="header-title">Dispatch Desk</div>
+          <div class="status">
+            <div><strong>{{ status_text }}</strong></div>
             <div>File: {{ file_display }}</div>
             <div>Last processed: {{ last_processed }}</div>
             <div>File modified: {{ file_modified }}</div>
             <div>Today: {{ today_str }}</div>
           </div>
         </div>
-        <div class="nav-row">
-          <a class="nav-btn {% if mode=='dispatch' %}active{% endif %}" href="/?mode=dispatch">Dispatch Desk</a>
-          <a class="nav-btn {% if mode=='delivery' %}active{% endif %}" href="/?mode=delivery">Delivery Slip</a>
-        </div>
-        <div style="margin: 8px 0 12px 0; display:flex; justify-content:flex-end;">
-          <a href="/download-template" style="text-decoration:none;">
-            <button class="btn" type="button" style="width:auto; padding:10px 14px;">Download Master Roll Template</button>
+
+        <div class="tabsbar">
+          <div class="tabs-list">
+            <a class="tab {% if mode=='dispatch' %}active{% endif %}" href="/?mode=dispatch">Dispatch Desk</a>
+            <a class="tab {% if mode=='delivery' %}active{% endif %}" href="/?mode=delivery">Delivery Slip</a>
+          </div>
+          <a href="/download-template" class="template-btn">
+            <span style="font-size:14px;">⬇</span>
+            <span>Download Master Roll Template</span>
           </a>
         </div>
+
+        {% if mode == 'delivery' %}
         <div class="grid">
-          {% if mode == 'delivery' %}
-          <div class="card card-primary">
+          <div class="card">
             <h2>Delivery Slip Generator</h2>
             <form method="post" enctype="multipart/form-data">
               <input type="hidden" name="mode" value="delivery" />
@@ -1117,9 +1118,9 @@ def home():
               <button class="btn" type="submit">Generate</button>
               <div class="microcopy">Generates preview before download.</div>
             </form>
-              {% if error %}<div class="alert">Error: {{error}}</div>{% endif %}
+            {% if error %}<div class="alert">Error: {{error}}</div>{% endif %}
           </div>
-          <div class="card preview-card {% if delivery_snippet %}card-secondary active{% else %}card-secondary{% endif %}">
+          <div class="card preview-card">
             <h2>Preview & Download</h2>
             {% if delivery_snippet %}
               <div class="result">
@@ -1132,8 +1133,10 @@ def home():
               <p style="color:#666;">Generate a delivery slip to see the preview here.</p>
             {% endif %}
           </div>
-          {% else %}
-          <div class="card card-primary">
+        </div>
+        {% else %}
+        <div class="grid">
+          <div class="card">
             <h2>Slip Generator</h2>
             <form method="post" enctype="multipart/form-data">
               <input type="hidden" name="mode" value="dispatch" />
@@ -1182,9 +1185,9 @@ def home():
               <div class="microcopy">Generates preview before download.</div>
               {% if uploaded_name %}<div style="margin-top:6px; color:#444; text-align:left;">Using uploaded file: {{uploaded_name}}</div>{% endif %}
             </form>
-              {% if error %}<div class="alert">Error: {{error}}<br/>Check spelling or confirm column values in Master Roll.</div>{% endif %}
+            {% if error %}<div class="alert">Error: {{error}}<br/>Check spelling or confirm column values in Master Roll.</div>{% endif %}
           </div>
-          <div class="card preview-card {% if html_snippet %}card-secondary active{% else %}card-secondary{% endif %}">
+          <div class="card preview-card">
             <h2>Preview & Download</h2>
             {% if html_snippet %}
               <div class="result">
@@ -1202,9 +1205,9 @@ def home():
               <p style="color:#666;">Generate a slip to see the preview here.</p>
             {% endif %}
           </div>
-          {% endif %}
         </div>
-        <footer>designed by Shivank Chadda • Internal tool • FGN Operations • v1.0</footer>
+        {% endif %}
+        <footer>designed by Shoddy Classics | Deployed tool • FGN Operations v1.0.0</footer>
       </div>
       <script>
         const uploadOnly = document.getElementById('upload_only');
