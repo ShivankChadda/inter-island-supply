@@ -40,9 +40,11 @@ DELIVERY_XLSX = None  # uploaded delivery master roll (per session)
 # Branding asset and label sizing in inches / pixels
 LOGO_PATH = "new_logo.png"
 CLIPART_PATH = "Excel clipart.png"
+FOLDER_CLIPART_PATH = "folder_clipart.jpg"
 MARKER_DIR = "Marker box"
 TEMPLATE_PATH = "Master Roll Template.xlsx"
 DELIVERY_TEMPLATE = "Delivery Slip Master Roll.xlsx"  # optional default path if bundled
+DELIVERY_REPORT_TEMPLATE = "Delivery Report Template.xlsx"
 LABEL_WIDTH_IN = 5  # label width in inches (landscape 5x3)
 LABEL_HEIGHT_IN = 3  # label height in inches
 LABEL_DPI = 300  # DPI for high-quality PNG output
@@ -111,6 +113,18 @@ def load_logo_data_uri() -> str:
 
 
 LOGO_DATA_URI = load_logo_data_uri()
+
+
+def load_folder_clipart_data_uri() -> str:
+    try:
+        with open(FOLDER_CLIPART_PATH, "rb") as f:
+            encoded = base64.b64encode(f.read()).decode("ascii")
+            return f"data:image/png;base64,{encoded}"
+    except Exception:
+        return ""
+
+
+FOLDER_CLIPART_DATA_URI = load_folder_clipart_data_uri()
 
 
 def load_marker_images():
@@ -856,6 +870,8 @@ def home():
     file_cols = []
     mode = request.args.get("mode") or request.form.get("mode") or "dispatch"
     delivery_uploaded_name = None
+    delivery_file_rows = None
+    delivery_file_cols = []
 
     if request.method == "POST":
         if mode == "delivery":
@@ -871,6 +887,14 @@ def home():
                     delivery_upload.save(tmp_path)
                     DELIVERY_XLSX = tmp_path
                     delivery_uploaded_name = delivery_upload.filename
+                if DELIVERY_XLSX:
+                    try:
+                        ddf = pd.read_excel(DELIVERY_XLSX, nrows=5000)
+                        delivery_file_rows = len(ddf)
+                        delivery_file_cols = list(ddf.columns[:12])
+                    except Exception:
+                        delivery_file_rows = None
+                        delivery_file_cols = []
                 if not DELIVERY_XLSX:
                     raise ValueError("Please upload the Delivery Slip Master Roll (.xlsx).")
                 meta = load_delivery_row(vendor_name, DELIVERY_XLSX)
@@ -1007,6 +1031,14 @@ def home():
             file_cols = [c for c in key_cols if c in tmp_df.columns]
         except Exception:
             file_rows = None
+    if delivery_file_rows is None and DELIVERY_XLSX:
+        try:
+            ddf = pd.read_excel(DELIVERY_XLSX, nrows=5000)
+            delivery_file_rows = len(ddf)
+            delivery_file_cols = list(ddf.columns[:12])
+        except Exception:
+            delivery_file_rows = None
+            delivery_file_cols = []
 
     template = """
     <!doctype html>
@@ -1299,6 +1331,9 @@ def home():
         last_processed=last_processed,
         mode=mode,
         delivery_file_name=delivery_file_name,
+        folder_clipart=FOLDER_CLIPART_DATA_URI,
+        delivery_file_rows=delivery_file_rows,
+        delivery_file_cols=delivery_file_cols,
     )
 
 
