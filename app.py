@@ -38,11 +38,13 @@ DELIVERY_CACHE = {"pdf": None, "filename": None}  # simple cache for delivery sl
 DELIVERY_XLSX = None  # uploaded delivery master roll (per session)
 
 # Branding asset and label sizing in inches / pixels
-LOGO_PATH = "Farmers_Wordmark_Badge_Transparent_1_3000px.png"
+LOGO_PATH = "new_logo.png"
 CLIPART_PATH = "Excel clipart.png"
+FOLDER_CLIPART_PATH = "folder_clipart.jpg"
 MARKER_DIR = "Marker box"
 TEMPLATE_PATH = "Master Roll Template.xlsx"
-DELIVERY_TEMPLATE = "Delivery Slip Master Roll.xlsx""  # optional default path if bundled
+DELIVERY_TEMPLATE = "Delivery Slip Master Roll.xlsx"  # optional default path if bundled
+DELIVERY_REPORT_TEMPLATE = "Delivery Report Template .xlsx"
 LABEL_WIDTH_IN = 5  # label width in inches (landscape 5x3)
 LABEL_HEIGHT_IN = 3  # label height in inches
 LABEL_DPI = 300  # DPI for high-quality PNG output
@@ -111,6 +113,18 @@ def load_logo_data_uri() -> str:
 
 
 LOGO_DATA_URI = load_logo_data_uri()
+
+
+def load_folder_clipart_data_uri() -> str:
+    try:
+        with open(FOLDER_CLIPART_PATH, "rb") as f:
+            encoded = base64.b64encode(f.read()).decode("ascii")
+            return f"data:image/jpeg;base64,{encoded}"
+    except Exception:
+        return ""
+
+
+FOLDER_CLIPART_DATA_URI = load_folder_clipart_data_uri()
 
 
 def load_marker_images():
@@ -616,7 +630,7 @@ def make_delivery_pdf(meta: dict, images: list[tuple[str, bytes]]) -> tuple[byte
         colWidths=[doc.width * 0.33, doc.width * 0.34, doc.width * 0.33],
     )
     divider.setStyle(TableStyle([
-        ("LINEBELOW", (0,0), (-1,0), 0.8, colors.black, (2,2)),
+        ("LINEBELOW", (0,0), (-1,0), 0.8, colors.black),
         ("ALIGN", (1,0), (1,0), "CENTER"),
         ("VALIGN", (0,0), (-1,-1), "MIDDLE"),
         ("TOPPADDING", (0,0), (-1,-1), 4),
@@ -814,6 +828,8 @@ def home():
     file_cols = []
     mode = request.args.get("mode") or request.form.get("mode") or "dispatch"
     delivery_uploaded_name = None
+    delivery_file_rows = None
+    delivery_file_cols = []
 
     if request.method == "POST":
         if mode == "delivery":
@@ -829,6 +845,14 @@ def home():
                     delivery_upload.save(tmp_path)
                     DELIVERY_XLSX = tmp_path
                     delivery_uploaded_name = delivery_upload.filename
+                if DELIVERY_XLSX:
+                    try:
+                        ddf = pd.read_excel(DELIVERY_XLSX, nrows=5000)
+                        delivery_file_rows = len(ddf)
+                        delivery_file_cols = list(ddf.columns[:12])
+                    except Exception:
+                        delivery_file_rows = None
+                        delivery_file_cols = []
                 if not DELIVERY_XLSX:
                     raise ValueError("Please upload the Delivery Slip Master Roll (.xlsx).")
                 meta = load_delivery_row(vendor_name, DELIVERY_XLSX)
@@ -965,6 +989,14 @@ def home():
             file_cols = [c for c in key_cols if c in tmp_df.columns]
         except Exception:
             file_rows = None
+    if delivery_file_rows is None and DELIVERY_XLSX:
+        try:
+            ddf = pd.read_excel(DELIVERY_XLSX, nrows=5000)
+            delivery_file_rows = len(ddf)
+            delivery_file_cols = list(ddf.columns[:12])
+        except Exception:
+            delivery_file_rows = None
+            delivery_file_cols = []
 
     template = """
     <!doctype html>
@@ -973,111 +1005,137 @@ def home():
       <title>Slip Generator</title>
       <style>
         :root {
-          --primary: #B5906D;
-          --bg: #F1E7D5;
-          --border: #15322A;
+          --primary: #0f172a;
+          --muted: #475569;
+          --bg: #f8fafc;
+          --card: #ffffff;
+          --border: #e2e8f0;
         }
-        body { font-family: 'Bell MT','CMU Serif','Computer Modern',serif; background:var(--bg); padding:16px 16px 12px 16px; font-size:18px; }
-        .page { max-width: 1050px; margin: 0 auto; }
-        .topbar { display:flex; align-items:center; justify-content:space-between; padding:10px 14px; border:1px solid var(--border); border-radius:10px; background:white; box-shadow:0 6px 16px rgba(0,0,0,0.08); margin-bottom:14px; }
-        .top-left { display:flex; align-items:center; gap:10px; font-size:22px; font-weight:bold; color: var(--border); }
-        .top-right { text-align:right; font-family: 'Courier New', monospace; font-size:14px; line-height:1.4; color:#333; }
-        .grid { display: grid; grid-template-columns: 1fr; gap: 12px; }
-        @media (min-width: 900px) { .grid { grid-template-columns: 1fr 1.2fr; } }
-        .card { background:white; padding:20px 24px; border-radius:12px; box-shadow: 0 8px 24px rgba(0,0,0,0.08); border:1px solid #d6c9b5; }
-        .card-primary { border:2px solid var(--border); box-shadow: 0 10px 26px rgba(0,0,0,0.1); }
-        .card-secondary { border:1px solid #e8dcc7; }
-        .card-secondary.active { border:2px solid var(--primary); box-shadow: 0 10px 26px rgba(181,144,109,0.25); }
-        .card h2 { margin-top:0; text-align:left; }
-        label { display:block; margin-top:18px; margin-bottom:8px; font-weight:bold; text-align:left; }
-        input[type="text"], select { padding:10px; width: 100%; font-size:18px; font-family: 'Bell MT','CMU Serif','Computer Modern',serif; text-align:left; border:1px solid var(--border); border-radius:8px; box-sizing:border-box; background:white; margin-bottom:16px; }
-        input[type="checkbox"] { width:auto; height:auto; margin:0; accent-color: var(--border); }
-        .btn { margin-top:16px; padding:14px 18px; background:#9a7754; color:white; border:1px solid var(--border); cursor:pointer; font-size:18px; font-family: 'Bell MT','CMU Serif','Computer Modern',serif; border-radius:8px; width:100%; transition: all 0.15s ease; }
-        .btn:hover { background:#826340; box-shadow: 0 6px 12px rgba(0,0,0,0.12); }
-        .microcopy { font-size:13px; color:#444; margin-top:6px; text-align:left; }
-        .error { color:#b00020; margin-top:12px; }
-        .alert { background:#fdecea; color:#611a15; border:1px solid #f5c6cb; padding:10px 12px; border-radius:8px; margin-top:12px; }
-        .result { margin-top:10px; text-align:left; }
-        .preview-card { min-height: 300px; }
-        .header-title { display:none; }
-        .dropzone { border:1.5px dashed #a6937f; border-radius:12px; background:rgba(181,144,109,0.05); padding:16px; text-align:center; cursor:pointer; transition: all 0.2s ease; box-shadow: none; }
-        .dropzone.hover { background: rgba(181,144,109,0.08); border:1.5px solid #8c7458; box-shadow: 0 8px 18px rgba(0,0,0,0.08); }
+        body { font-family: 'Bell MT','CMU Serif','Computer Modern',serif; background:var(--bg); margin:0; }
+        .page { max-width: 1200px; margin: 0 auto; padding: 32px 24px; }
+        .header { display:flex; justify-content:space-between; align-items:flex-start; margin-bottom:24px; gap:12px; }
+        .header-title { font-size:26px; font-weight:bold; color:var(--primary); }
+        .status { text-align:right; font-size:13px; color:var(--muted); line-height:1.4; }
+        .status strong { color:var(--primary); }
+        .tabsbar { display:flex; justify-content:space-between; align-items:center; margin-bottom:24px; gap:12px; }
+        .tabs-list { display:inline-flex; border:1px solid var(--border); border-radius:10px; background:var(--card); padding:4px; }
+        .tab { padding:10px 16px; border:none; background:transparent; cursor:pointer; border-radius:8px; font-size:15px; color:var(--muted); text-decoration:none; }
+        .tab.active { background:#e2e8f0; color:var(--primary); font-weight:600; }
+        .template-btn { display:inline-flex; align-items:center; gap:8px; padding:10px 14px; border:1px solid var(--border); background:var(--card); border-radius:10px; cursor:pointer; font-size:15px; color:var(--primary); text-decoration:none; }
+        .grid { display:grid; grid-template-columns:1fr; gap:20px; }
+        @media (min-width: 1024px) { .grid { grid-template-columns:1fr 1fr; } }
+        .card { background:var(--card); padding:20px 22px; border-radius:12px; border:1px solid var(--border); box-shadow:0 10px 30px rgba(15,23,42,0.05); }
+        .card h2 { margin:0 0 12px 0; font-size:18px; color:var(--primary); }
+        label { display:block; margin-top:14px; margin-bottom:8px; font-weight:600; color:var(--primary); }
+        input[type="text"], select { padding:10px; width: 100%; font-size:16px; font-family: 'Bell MT','CMU Serif','Computer Modern',serif; text-align:left; border:1px solid var(--border); border-radius:8px; box-sizing:border-box; background:white; }
+        input[type="checkbox"] { width:auto; height:auto; margin:0; accent-color: var(--primary); }
+        .btn { margin-top:16px; padding:14px 18px; background:#0f172a; color:white; border:1px solid #0f172a; cursor:pointer; font-size:16px; font-family: 'Bell MT','CMU Serif','Computer Modern',serif; border-radius:8px; width:100%; transition: all 0.15s ease; }
+        .btn:hover { background:#111827; }
+        .microcopy { font-size:13px; color:var(--muted); margin-top:6px; text-align:left; }
+        .alert { background:#fef2f2; color:#991b1b; border:1px solid #fecaca; padding:10px 12px; border-radius:8px; margin-top:12px; }
+        .result { margin-top:10px; text-align:left; color:var(--primary); }
+        .preview-card { min-height: 320px; }
+        .dropzone { border:1.5px dashed #cbd5e1; border-radius:12px; background:#f8fafc; padding:16px; text-align:center; cursor:pointer; transition: all 0.2s ease; box-shadow: none; }
+        .dropzone.hover { background:#e2e8f0; border:1.5px solid #94a3b8; }
         .dropzone img { width: 52px; height: auto; display:block; margin:0 auto 10px; }
-        .dropzone .dz-title { font-weight:600; margin-bottom:8px; font-size:17px; color:#3a342c; }
-        .dropzone .dz-sub { color:#555; font-size:13px; margin-bottom:6px; }
-        .dropzone .dz-hint { color:#777; font-size:12px; }
+        .dropzone .dz-title { font-weight:600; margin-bottom:8px; font-size:16px; color:var(--primary); }
+        .dropzone .dz-sub { color:var(--muted); font-size:13px; margin-bottom:6px; }
+        .dropzone .dz-hint { color:#94a3b8; font-size:12px; }
         .dropzone input { display:none; }
-        .file-preview { border:1px solid var(--border); border-radius:10px; padding:14px; background:#fff; display:flex; align-items:center; gap:12px; box-shadow:0 6px 16px rgba(0,0,0,0.08); margin-bottom:16px; }
+        .file-preview { border:1px solid var(--border); border-radius:10px; padding:14px; background:#fff; display:flex; align-items:center; gap:12px; box-shadow:0 6px 16px rgba(15,23,42,0.08); margin-bottom:16px; }
         .file-preview img { width:52px; height:auto; }
         .file-meta { flex:1; text-align:left; }
-        .file-meta .name { font-weight:600; color:var(--border); font-size:15px; }
-        .file-meta .status-pill { display:inline-block; padding:4px 8px; border-radius:10px; background:#e1f3e1; color:#2e7d32; font-size:12px; margin-top:4px; }
-        .file-meta .meta-line { font-size:13px; color:#555; margin-top:4px; }
+        .file-meta .name { font-weight:600; color:var(--primary); font-size:15px; }
+        .file-meta .status-pill { display:inline-block; padding:4px 8px; border-radius:10px; background:#e2fbe2; color:#166534; font-size:12px; margin-top:4px; }
+        .file-meta .meta-line { font-size:13px; color:var(--muted); margin-top:4px; }
         .file-actions { display:flex; gap:10px; }
-        .file-actions button { padding:8px 12px; font-size:14px; border-radius:10px; border:1px solid var(--border); background:#f8f1e4; cursor:pointer; height:34px; }
+        .file-actions button { padding:8px 12px; font-size:14px; border-radius:10px; border:1px solid var(--border); background:#f8fafc; cursor:pointer; height:34px; }
         .file-actions button.primary { background:#fff; }
-        .file-actions button:hover { background:#e6d7c0; }
-        footer { margin-top:18px; text-align:center; font-size:14px; color:#444; }
-        .nav-row { display:flex; gap:8px; margin:8px 0 12px 0; }
-        .nav-btn { padding:10px 14px; border:1px solid var(--border); border-radius:10px; background:#fff; cursor:pointer; font-size:16px; text-decoration:none; color:var(--border); }
-        .nav-btn.active { background:var(--primary); color:#fff; }
+        .file-actions button:hover { background:#e2e8f0; }
+        footer { margin-top:24px; text-align:center; font-size:12px; color:#94a3b8; }
       </style>
     </head>
     <body>
       <div class="page">
-        <div class="topbar">
-          <div class="top-left">
-            <span class="top-title">FGN Dispatch Desk</span>
-          </div>
-          <div class="top-right">
-            <div>Status: {{ status_text }}</div>
+        <div class="header">
+          <div class="header-title">Dispatch Desk</div>
+          <div class="status">
+            <div><strong>{{ status_text }}</strong></div>
             <div>File: {{ file_display }}</div>
             <div>Last processed: {{ last_processed }}</div>
             <div>File modified: {{ file_modified }}</div>
             <div>Today: {{ today_str }}</div>
           </div>
         </div>
-        <div class="nav-row">
-          <a class="nav-btn {% if mode=='dispatch' %}active{% endif %}" href="/?mode=dispatch">Dispatch Desk</a>
-          <a class="nav-btn {% if mode=='delivery' %}active{% endif %}" href="/?mode=delivery">Delivery Slip</a>
-        </div>
-        <div style="margin: 8px 0 12px 0; display:flex; justify-content:flex-end;">
-          <a href="/download-template" style="text-decoration:none;">
-            <button class="btn" type="button" style="width:auto; padding:10px 14px;">Download Master Roll Template</button>
-          </a>
+
+        <div class="tabsbar">
+          <div class="tabs-list">
+            <a class="tab {% if mode=='dispatch' %}active{% endif %}" href="/?mode=dispatch">Dispatch Desk</a>
+            <a class="tab {% if mode=='delivery' %}active{% endif %}" href="/?mode=delivery">Delivery Slip</a>
+          </div>
+          <div style="display:flex; gap:8px; align-items:center;">
+            <a href="/download-template" class="template-btn">
+              <span style="font-size:14px;">⬇</span>
+              <span>Download Master Roll Template</span>
+            </a>
+            <a href="/download-delivery-template" class="template-btn">
+              <span style="font-size:14px;">⬇</span>
+              <span>Download Delivery Report Template</span>
+            </a>
+          </div>
         </div>
         <div class="grid">
           {% if mode == 'delivery' %}
-          <div class="card card-primary">
+          <div class="card">
             <h2>Delivery Slip Generator</h2>
             <form method="post" enctype="multipart/form-data">
               <input type="hidden" name="mode" value="delivery" />
-              <label for="delivery_vendor">Vendor Name *</label>
+              <label for="delivery_vendor">Vendor Name</label>
               <input type="text" id="delivery_vendor" name="delivery_vendor" required placeholder="e.g., Anand" />
               <label for="delivery_workbook">Delivery Slip Master Roll (.xlsx)</label>
-              <div id="delivery-workbook-drop" class="dropzone">
-                <img src="{{ clipart_data }}" alt="Excel file" />
-                <div class="dz-title">Drop Delivery Slip Master Roll</div>
-                <div class="dz-sub">or click to browse (.xlsx)</div>
-                <div class="dz-hint">Excel files only (.xlsx)</div>
-                <input type="file" id="delivery_workbook" name="delivery_workbook" accept=".xlsx" {% if not delivery_file_name %}required{% endif %} />
-              </div>
               {% if delivery_file_name %}
-                <div class="microcopy">Using: {{ delivery_file_name }}</div>
+                <div class="file-preview">
+                  <img src="{{ clipart_data }}" alt="Excel file" />
+                  <div class="file-meta">
+                    <div class="name">{{ delivery_file_name }}</div>
+                    <div class="status-pill">Loaded</div>
+                    {% if delivery_file_rows is not none %}<div class="meta-line">Rows: {{ delivery_file_rows }} | Columns: {{ delivery_file_cols|join(', ') }}</div>{% endif %}
+                  </div>
+                  <div class="file-actions">
+                    <button type="button" class="primary" id="delivery-replace-btn">Replace</button>
+                  </div>
+                </div>
+                <input type="file" id="delivery_workbook" name="delivery_workbook" accept=".xlsx" style="display:none;" />
+              {% else %}
+                <div id="delivery-workbook-drop" class="dropzone">
+                  <img src="{{ clipart_data }}" alt="Excel file" />
+                  <div class="dz-title">Drop Delivery Slip Master Roll</div>
+                  <div class="dz-sub">or click to browse (.xlsx)</div>
+                  <div class="dz-hint">Excel files only (.xlsx)</div>
+                  <input type="file" id="delivery_workbook" name="delivery_workbook" accept=".xlsx" {% if not delivery_file_name %}required{% endif %} />
+                </div>
               {% endif %}
               <label for="photos">Upload photos (folder or select multiple)</label>
               <div id="delivery-photos-drop" class="dropzone">
+                <img src="{{ folder_clipart }}" alt="Folder" />
                 <div class="dz-title">Drop photos here</div>
                 <div class="dz-sub">or click to browse (PNG, JPG, JPEG)</div>
                 <div class="dz-hint">You can select multiple files</div>
                 <input type="file" id="photos" name="photos" accept="image/png,image/jpeg" multiple required />
               </div>
+              <div id="photos-preview" class="file-preview" style="display:none;">
+                <img src="{{ folder_clipart }}" alt="Folder" />
+                <div class="file-meta">
+                  <div class="name" id="photos-folder-name"></div>
+                  <div class="meta-line" id="photos-count"></div>
+                </div>
+              </div>
               <button class="btn" type="submit">Generate</button>
               <div class="microcopy">Generates preview before download.</div>
             </form>
-              {% if error %}<div class="alert">Error: {{error}}</div>{% endif %}
+            {% if error %}<div class="alert">Error: {{error}}</div>{% endif %}
           </div>
-          <div class="card preview-card {% if delivery_snippet %}card-secondary active{% else %}card-secondary{% endif %}">
+          <div class="card preview-card">
             <h2>Preview & Download</h2>
             {% if delivery_snippet %}
               <div class="result">
@@ -1091,7 +1149,7 @@ def home():
             {% endif %}
           </div>
           {% else %}
-          <div class="card card-primary">
+          <div class="card">
             <h2>Slip Generator</h2>
             <form method="post" enctype="multipart/form-data">
               <input type="hidden" name="mode" value="dispatch" />
@@ -1140,9 +1198,9 @@ def home():
               <div class="microcopy">Generates preview before download.</div>
               {% if uploaded_name %}<div style="margin-top:6px; color:#444; text-align:left;">Using uploaded file: {{uploaded_name}}</div>{% endif %}
             </form>
-              {% if error %}<div class="alert">Error: {{error}}<br/>Check spelling or confirm column values in Master Roll.</div>{% endif %}
+            {% if error %}<div class="alert">Error: {{error}}<br/>Check spelling or confirm column values in Master Roll.</div>{% endif %}
           </div>
-          <div class="card preview-card {% if html_snippet %}card-secondary active{% else %}card-secondary{% endif %}">
+          <div class="card preview-card">
             <h2>Preview & Download</h2>
             {% if html_snippet %}
               <div class="result">
@@ -1162,13 +1220,16 @@ def home():
           </div>
           {% endif %}
         </div>
-        <footer>designed by Shivank Chadda • Internal tool • FGN Operations • v1.0</footer>
+        <footer>designed by Shoddy Classics | Deployed tool • FGN Operations v1.0.0</footer>
       </div>
       <script>
         const uploadOnly = document.getElementById('upload_only');
         const slipSelect = document.getElementById('slip_type');
         const identifierInput = document.getElementById('identifier');
         const allMode = document.getElementById('all_mode');
+        const photosPreview = document.getElementById('photos-preview');
+        const photosFolderName = document.getElementById('photos-folder-name');
+        const photosCount = document.getElementById('photos-count');
 
         function toggleIdentifierRequired() {
           const isAll = allMode && allMode.checked;
@@ -1205,6 +1266,14 @@ def home():
           });
           input.addEventListener('change', (e) => {
             if (e.target.files && e.target.files.length) {
+              if (inputId === 'photos' && photosPreview && photosFolderName && photosCount) {
+                photosPreview.style.display = 'flex';
+                const fileCount = e.target.files.length;
+                const first = e.target.files[0];
+                const folderName = first.webkitRelativePath ? first.webkitRelativePath.split('/')[0] : first.name.split('/')[0] || 'Photos';
+                photosFolderName.textContent = folderName;
+                photosCount.textContent = fileCount + " photos selected";
+              }
               if (autoSubmit && uploadOnly) {
                 if (slipSelect) slipSelect.removeAttribute('required');
                 if (identifierInput) identifierInput.removeAttribute('required');
@@ -1221,6 +1290,8 @@ def home():
 
         const replaceBtn = document.getElementById('replace-btn');
         const replaceInput = document.getElementById('workbook');
+        const deliveryReplaceBtn = document.getElementById('delivery-replace-btn');
+        const deliveryInput = document.getElementById('delivery_workbook');
         if (replaceBtn && replaceInput) {
           replaceBtn.addEventListener('click', () => replaceInput.click());
           replaceInput.addEventListener('change', (e) => {
@@ -1233,6 +1304,9 @@ def home():
               replaceInput.form.submit();
             }
           });
+        }
+        if (deliveryReplaceBtn && deliveryInput) {
+          deliveryReplaceBtn.addEventListener('click', () => deliveryInput.click());
         }
       </script>
     </body>
@@ -1257,6 +1331,9 @@ def home():
         last_processed=last_processed,
         mode=mode,
         delivery_file_name=delivery_file_name,
+        folder_clipart=FOLDER_CLIPART_DATA_URI,
+        delivery_file_rows=delivery_file_rows,
+        delivery_file_cols=delivery_file_cols,
     )
 
 
@@ -1335,6 +1412,16 @@ def download_template():
     dated = datetime.now(LOCAL_TZ).strftime("%Y-%m-%d")
     filename = f"Master_Roll_{dated}.xlsx"
     return send_file(TEMPLATE_PATH, as_attachment=True, download_name=filename, mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+
+
+@app.route("/download-delivery-template")
+def download_delivery_template():
+    """Download the Delivery Report template with a dated filename."""
+    if not os.path.exists(DELIVERY_REPORT_TEMPLATE):
+        return "Template not found on server", 404
+    dated = datetime.now(LOCAL_TZ).strftime("%Y-%m-%d")
+    filename = f"Delivery_Report_{dated}.xlsx"
+    return send_file(DELIVERY_REPORT_TEMPLATE, as_attachment=True, download_name=filename, mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
 
 
 @app.route("/delivery-pdf")
