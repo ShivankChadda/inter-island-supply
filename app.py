@@ -38,7 +38,8 @@ DELIVERY_CACHE = {"pdf": None, "filename": None}  # simple cache for delivery sl
 DELIVERY_XLSX = None  # uploaded delivery master roll (per session)
 
 # Branding asset and label sizing in inches / pixels
-LOGO_PATH = "new_logo.png"
+LOGO_PATH = "new_logo.png"  # UI + delivery slip
+LABEL_LOGO_PATH = "Farmers_Wordmark_Badge_Transparent_1_3000px.png"  # label assets
 CLIPART_PATH = "Excel clipart.png"
 FOLDER_CLIPART_PATH = "folder_clipart.jpg"
 MARKER_DIR = "Marker box"
@@ -465,10 +466,10 @@ def make_label_zip(items: list[dict], meta: dict, identifier: str) -> tuple[byte
     font_label = load_font(40, bold=True)
     font_value = load_font(40, bold=False)
 
-    # pre-load logo
+    # pre-load logo (labels use the wordmark badge)
     logo_img = None
     try:
-        logo_img = PILImage.open(LOGO_PATH).convert("RGBA")
+        logo_img = PILImage.open(LABEL_LOGO_PATH).convert("RGBA")
     except Exception:
         logo_img = None
 
@@ -615,8 +616,13 @@ def make_delivery_pdf(meta: dict, images: list[tuple[str, bytes]]) -> tuple[byte
     # Header row: logo left, company details right (right-aligned)
     logo_flow = ""
     try:
-        logo = Image(LOGO_PATH, width=120, height=70)
-        logo_flow = logo
+        pil_logo = PILImage.open(LOGO_PATH)
+        lw, lh = pil_logo.size
+        max_h = 70  # keep aspect, cap height
+        scale = min(max_h / lh, 1.0)
+        new_w = lw * scale
+        new_h = lh * scale
+        logo_flow = Image(LOGO_PATH, width=new_w, height=new_h)
     except Exception:
         pass
     company_lines = [
