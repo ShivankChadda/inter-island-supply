@@ -179,7 +179,9 @@ def load_delivery_row(vendor: str, path: str) -> dict:
         "Number of boxes",
         "Number of trays",
     ]
-    df = pd.read_excel(path)
+    # read all sheets so we can also pull captions sheet if present
+    all_sheets = pd.read_excel(path, sheet_name=None)
+    df = next(iter(all_sheets.values())) if isinstance(all_sheets, dict) else pd.read_excel(path)
     missing = [c for c in required_cols if c not in df.columns]
     if missing:
         raise ValueError(f"Delivery master missing columns: {', '.join(missing)}")
@@ -187,6 +189,25 @@ def load_delivery_row(vendor: str, path: str) -> dict:
     if not mask.any():
         raise ValueError(f"Vendor '{vendor}' not found in Delivery Slip Master Roll.")
     row = df[mask].iloc[0]
+    captions_map = {}
+    if isinstance(all_sheets, dict):
+        for name, sdf in all_sheets.items():
+            cols_lower = [c.strip().lower() for c in sdf.columns]
+            if "caption" in "".join(cols_lower) or "image" in "".join(cols_lower):
+                img_col = None
+                cap_col = None
+                for c in sdf.columns:
+                    cl = c.strip().lower()
+                    if "image" in cl:
+                        img_col = c
+                    if "caption" in cl:
+                        cap_col = c
+                if img_col and cap_col:
+                    for _, crow in sdf[[img_col, cap_col]].dropna(how="all").iterrows():
+                        key = str(crow[img_col]).strip().lower()
+                        val = str(crow[cap_col]).strip()
+                        if key and val:
+                            captions_map[key] = val
     def val_int(x):
         try:
             n = int(x)
@@ -202,6 +223,7 @@ def load_delivery_row(vendor: str, path: str) -> dict:
         "packages": val_int(row["Number of packages"]),
         "boxes": val_int(row["Number of boxes"]),
         "trays": val_int(row["Number of trays"]),
+        "captions_map": captions_map,
     }
     return meta
 
@@ -576,6 +598,10 @@ def make_delivery_pdf(meta: dict, images: list[tuple[str, bytes]]) -> tuple[byte
     else:
         sailing_date = str(sailing_raw)
     packages = meta.get("packages") or 0
+    boxes = meta.get("boxes") or 0
+    trays = meta.get("trays") or 0
+    total_packages = packages + boxes + trays
+    captions_map = meta.get("captions_map") or {}
 
     # Typography hierarchy (Bell MT intent; Times used as fallback)
     company_name_style = ParagraphStyle(name="CompanyName", fontName="Times-Bold", fontSize=12, leading=14, alignment=2, textColor=colors.HexColor("#2f2a24"))
@@ -653,7 +679,7 @@ def make_delivery_pdf(meta: dict, images: list[tuple[str, bytes]]) -> tuple[byte
     meta_rows = [
         [Paragraph("Ship Name", meta_label_style), Paragraph(ship_name, meta_value_style)],
         [Paragraph("Sailing Date", meta_label_style), Paragraph(sailing_date, meta_value_style)],
-        [Paragraph("Total Packages", meta_label_style), Paragraph(str(packages), meta_value_style)],
+        [Paragraph("Total Packages", meta_label_style), Paragraph(str(total_packages), meta_value_style)],
     ]
     right_block = Table(meta_rows, colWidths=[doc.width * 0.18, doc.width * 0.22])
     right_block.setStyle(TableStyle([
@@ -675,6 +701,40 @@ def make_delivery_pdf(meta: dict, images: list[tuple[str, bytes]]) -> tuple[byte
     ]))
     story.append(info_table)
     story.append(Spacer(1, 16))
+
+    # Summary boxes: boxes / packages / trays (only non-zero), center across up to 3 slots
+    summary_items = []
+    if boxes > 0:
+        summary_items.append(("Boxes", boxes))
+    if packages > 0:
+        summary_items.append(("Packages", packages))
+    if trays > 0:
+        summary_items.append(("Trays", trays))
+    if summary_items:
+        slots = ["", "", ""]
+        start_idx = (3 - len(summary_items)) // 2
+        for i, item in enumerate(summary_items):
+            slots[start_idx + i] = item
+        num_style = ParagraphStyle(name="Num", fontName="Times-Bold", fontSize=16, leading=18, alignment=1, textColor=colors.HexColor("#3b332a"))
+        lbl_style = ParagraphStyle(name="Lbl", fontName="Times-Roman", fontSize=11, leading=13, alignment=1, textColor=colors.HexColor("#5a544d"))
+        cells = []
+        for slot in slots:
+            if slot == "":
+                cells.append("")
+            else:
+                label, val = slot
+                cells.append([Paragraph(str(val), num_style), Paragraph(label, lbl_style)])
+        summary_table = Table([cells], colWidths=[doc.width/3]*3)
+        summary_table.setStyle(TableStyle([
+            ("VALIGN", (0,0), (-1,-1), "MIDDLE"),
+            ("ALIGN", (0,0), (-1,-1), "CENTER"),
+            ("BOX", (0,0), (-1,-1), 0.5, colors.HexColor("#d1c6b8")),
+            ("BACKGROUND", (0,0), (-1,-1), colors.HexColor("#fbf9f6")),
+            ("TOPPADDING", (0,0), (-1,-1), 8),
+            ("BOTTOMPADDING", (0,0), (-1,-1), 8),
+        ]))
+        story.append(summary_table)
+        story.append(Spacer(1, 14))
 
     # Divider before photos
     story.append(Paragraph("Package Photos", ParagraphStyle(name="Div", fontName="Times-Bold", fontSize=12, leading=14, textColor=colors.HexColor("#4a433b"))))
@@ -704,7 +764,8 @@ def make_delivery_pdf(meta: dict, images: list[tuple[str, bytes]]) -> tuple[byte
         frame.save(bio, format="PNG")
         bio.seek(0)
         cap_style = ParagraphStyle(name="Cap", fontName="Times-Roman", fontSize=10, leading=12, alignment=1, textColor=colors.HexColor("#4a433b"))
-        label = f"Package {idx+1}"
+        base = os.path.splitext(name)[0].lower()
+        label = captions_map.get(base, f"Package {idx+1}")
         table = Table(
             [[Image(bio, width=frame.width, height=frame.height)],
              [Paragraph(label, cap_style)]],
@@ -1220,7 +1281,7 @@ def home():
           </div>
           {% endif %}
         </div>
-        <footer>designed by Shoddy Classics | Deployed tool • FGN Operations v1.0.0</footer>
+        <footer>designed by Shivank Chadda | Internal tool • FGN Operations v1.0.0</footer>
       </div>
       <script>
         const uploadOnly = document.getElementById('upload_only');
