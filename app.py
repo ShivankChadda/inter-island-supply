@@ -796,12 +796,11 @@ def make_delivery_pdf(meta: dict, images: list[tuple[str, bytes]]) -> tuple[byte
         while len(row) < 3:
             row.append("")
         rows.append(row)
-        if len(rows) == 3:
-            story.append(Table(rows, colWidths=[cell_w]*3, style=TableStyle([("VALIGN",(0,0),(-1,-1),"TOP"),("ALIGN",(0,0),(-1,-1),"CENTER")])))
-            story.append(PageBreak())
-            rows = []
     if rows:
-        story.append(Table(rows, colWidths=[cell_w]*3, style=TableStyle([("VALIGN",(0,0),(-1,-1),"TOP"),("ALIGN",(0,0),(-1,-1),"CENTER")])))
+        story.append(Table(rows, colWidths=[cell_w]*3, style=TableStyle([
+            ("VALIGN",(0,0),(-1,-1),"TOP"),
+            ("ALIGN",(0,0),(-1,-1),"CENTER"),
+        ])))
 
     doc.build(story)
     buf.seek(0)
